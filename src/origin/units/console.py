@@ -375,6 +375,9 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd == "objects":
         _list_objects(ctx)
 
+    elif cmd == "status":
+        _status(ctx)
+
     elif cmd in ("units", "caps", "audit", "messages", "powers"):
         _inspect_core(ctx, cmd, rest)
 
@@ -566,6 +569,54 @@ def _inspect_unit(ctx: UnitContext, what: str, rest: list[str]) -> None:
         _say(c, "\n".join(lines))
 
     ctx.request(service, verb, {"limit": limit}, (cap,), then=shown)
+
+
+def _status(ctx: UnitContext) -> None:
+    cap = _audit_cap(ctx)
+    if cap is None:
+        return
+
+    def units_done(c: UnitContext, reply: Message) -> None:
+        p = reply.payload or {}
+        if reply.verb != "inspect.result":
+            _say(c, f"the Nucleus refused status: {p.get('reason', p)}")
+            return
+
+        rows = p.get("units", [])
+        focus = c.mem.get("focus", {})
+        focus_name = focus.get("name") or focus.get("object_id") or focus.get("recipient_name") or "none"
+        lines = [
+            "Origin status",
+            f"  step: {c.step}",
+            f"  units: {len(rows)}",
+            f"  focus: {focus_name}",
+        ]
+
+        store = _services(c).get("object_store")
+        if store is None:
+            _say(c, "\n".join(lines))
+            return
+
+        def objects_done(c2: UnitContext, reply2: Message) -> None:
+            p2 = reply2.payload or {}
+            if reply2.verb != "object.enumerate":
+                _say(c2, f"the Object store refused status: {p2.get('reason', p2)}")
+                return
+            objects = p2.get("objects", [])
+            compacted = sum(len(obj.get("compacted", [])) for obj in objects)
+            pinned = sum(len(obj.get("pins", [])) for obj in objects)
+            durable = sum(obj.get("versions", 0) for obj in objects)
+            lines2 = lines + [
+                f"  objects: {len(objects)}",
+                f"  durable versions: {durable}",
+                f"  compacted versions: {compacted}",
+                f"  pinned versions: {pinned}",
+            ]
+            _say(c2, "\n".join(lines2))
+
+        c.request(store, "object.enumerate", {}, (cap,), then=objects_done)
+
+    ctx.request(NUCLEUS, "inspect", {"what": "units"}, (cap,), then=units_done)
 
 
 def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:

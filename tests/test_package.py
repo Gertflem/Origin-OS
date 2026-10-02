@@ -294,6 +294,18 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin status", output)
         self.assertIn("units:", output)
 
+    def test_console_accepts_status_command(self):
+        from origin.main import _to_console, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _to_console(system, "/status")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("origin status", output)
+        self.assertIn("units:", output)
+
     def test_units_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
