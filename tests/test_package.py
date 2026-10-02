@@ -262,6 +262,36 @@ class TestPackage(unittest.TestCase):
         self.assertIn("revoked", output)
         self.assertIn("revoke check", output)
 
+    def test_caps_can_be_filtered_by_right_or_target(self):
+        from origin.ids import HUMAN, NUCLEUS
+        from origin.main import _handle, boot
+        from origin.capability import Right
+
+        system = boot()
+        system.nucleus.mint(
+            (Right.READ,), "photo:beach", HUMAN, "alice", authority=system.guardian, label="beach read"
+        )
+        cap = system.nucleus.mint(
+            (Right.APPEND,), "mailbox:david", HUMAN, "bob", authority=system.guardian, label="mailbox append"
+        )
+        system.nucleus.revoke(cap, NUCLEUS, "cleanup")
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/caps read")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("beach read", output)
+        self.assertNotIn("mailbox append", output)
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/caps photo")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("beach read", output)
+        self.assertNotIn("mailbox append", output)
+
     def test_audit_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

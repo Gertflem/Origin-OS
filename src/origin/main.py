@@ -419,7 +419,7 @@ def _names(system: System) -> None:
 
 def _caps(system: System, args: list[str] | None = None) -> None:
     rows = list(getattr(system.nucleus, "_caps", {}).values())
-    holder_filters: list[str] = []
+    filter_tokens: list[str] = []
     live_only = False
     revoked_only = False
     for arg in args or []:
@@ -429,20 +429,24 @@ def _caps(system: System, args: list[str] | None = None) -> None:
         elif key == "revoked":
             revoked_only = True
         elif key not in {"all", "allcaps"}:
-            holder_filters.append(arg)
+            filter_tokens.append(arg)
 
     if live_only:
         rows = [rec for rec in rows if not rec.revoked and rec.live_at(system.nucleus.current_step())]
     if revoked_only:
         rows = [rec for rec in rows if rec.revoked]
-    if holder_filters:
+    if filter_tokens:
         rows = [
             rec
             for rec in rows
-            if any(
-                holder.lower() == filt.lower() or holder.lower().startswith(filt.lower())
-                for holder in rec.holders
-                for filt in holder_filters
+            if all(
+                any(
+                    right.value.lower() == token.lower() or right.value.lower().startswith(token.lower())
+                    for right in rec.rights
+                )
+                or any(holder.lower() == token.lower() or holder.lower().startswith(token.lower()) for holder in rec.holders)
+                or (rec.target is not None and (rec.target.lower() == token.lower() or token.lower() in rec.target.lower()))
+                for token in (part.lower() for part in filter_tokens)
             )
         ]
 
