@@ -419,13 +419,41 @@ def _names(system: System) -> None:
 
 def _caps(system: System, args: list[str] | None = None) -> None:
     rows = list(getattr(system.nucleus, "_caps", {}).values())
-    live_only = bool(args and args[0].lower() in {"live", "active"})
+    holder_filters: list[str] = []
+    live_only = False
+    revoked_only = False
+    for arg in args or []:
+        key = arg.lower()
+        if key in {"live", "active"}:
+            live_only = True
+        elif key == "revoked":
+            revoked_only = True
+        elif key not in {"all", "allcaps"}:
+            holder_filters.append(arg)
+
     if live_only:
         rows = [rec for rec in rows if not rec.revoked and rec.live_at(system.nucleus.current_step())]
+    if revoked_only:
+        rows = [rec for rec in rows if rec.revoked]
+    if holder_filters:
+        rows = [
+            rec
+            for rec in rows
+            if any(
+                holder.lower() == filt.lower() or holder.lower().startswith(filt.lower())
+                for holder in rec.holders
+                for filt in holder_filters
+            )
+        ]
 
     print("Origin caps")
     print("  capability registry")
-    print(f"  mode: {'live' if live_only else 'all'}")
+    mode = "all"
+    if live_only and not revoked_only:
+        mode = "live"
+    elif revoked_only and not live_only:
+        mode = "revoked"
+    print(f"  mode: {mode}")
     print(f"  total: {len(rows)} capabilities")
     for rec in sorted(rows, key=lambda item: (item.created_step, item.cap_id)):
         rights = "+".join(sorted(r.value for r in rec.rights)) or "-"
