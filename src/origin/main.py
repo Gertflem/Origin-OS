@@ -351,10 +351,17 @@ def _status(system: System) -> None:
     units = getattr(system.nucleus, "_units", {})
     objects = getattr(system.store, "_objects", {})
     caps = getattr(system.nucleus, "_caps", {})
+    durable_versions = 0
+    compacted_versions = 0
+    for obj in objects.values():
+        durable_versions += sum(1 for version in obj.versions if version.acked)
+        compacted_versions += len(obj.compacted)
     print("Origin status")
     print(f"  step: {system.nucleus.current_step()}")
     print(f"  units: {len(units)}")
     print(f"  objects: {len(objects)}")
+    print(f"  durable versions: {durable_versions}")
+    print(f"  compacted versions: {compacted_versions}")
     print(f"  capabilities: {len(caps)}")
     print(f"  console: {system.console}")
     print(f"  naming: {system.naming}")

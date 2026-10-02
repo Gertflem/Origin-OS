@@ -134,6 +134,18 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin", output)
         self.assertIn("status", output.lower())
 
+    def test_status_reports_persistence_health(self):
+        from origin.main import main
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = main(["--status"])
+
+        self.assertEqual(result, 0)
+        output = buffer.getvalue().lower()
+        self.assertIn("durable", output)
+        self.assertIn("compacted", output)
+
     def test_status_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
