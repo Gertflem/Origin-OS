@@ -610,6 +610,25 @@ class Nucleus:
         what = p.get("what", "units")
         if what == "units":
             return {"units": [u.describe() for u in self._units.values()]}
+        if what == "agents":
+            agents = []
+            for unit in self._units.values():
+                if unit.kind != "agent":
+                    continue
+                rec = {
+                    "unit_id": unit.unit_id,
+                    "name": unit.name,
+                    "kind": unit.kind,
+                    "state": unit.arena.get("state", unit.state.value),
+                    "started_at": unit.arena.get("started_at"),
+                    "last_heartbeat": unit.arena.get("last_heartbeat"),
+                    "stopped_at": unit.arena.get("stopped_at"),
+                    "born_step": unit.born_step,
+                    "messages_handled": unit.messages_handled,
+                    "caps_held": len(unit.caps),
+                }
+                agents.append(rec)
+            return {"agents": agents}
         if what == "caps":
             return {"capabilities": [r.describe() for r in self._caps.values()]}
         if what == "snapshot":

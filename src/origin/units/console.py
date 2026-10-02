@@ -71,6 +71,7 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /show <name>       read an Object under a freshly minted READ token
     /history <name>    version metadata for an Object
     /spawn <kind> <name> [entry]      birth a new Unit under a temporary SPAWN token
+    /agent <name> [start|status|heartbeat|stop]   manage a simple agent lifecycle
     /freeze <name>     contain a Unit
     /kill <name>       retire a Unit and release its arena
     /rollback <name> [seq]   ask the Improver to restore an older code version
@@ -153,12 +154,12 @@ def _propose_choice(ctx: UnitContext, plan: dict, amb: dict) -> None:
     if not cands:
         _say(ctx, f"Nothing in the namespace matches {phrase!r}. Bind a name to it first, or rephrase.")
         return
-    lines = [f"I am not sure what {phrase!r} refers to:"]
+    lines = [f"I am not sure what {phrase!r} refers to. The closest matches are:"]
     lines += [
         f"  {n}. {c['name']}  ({c['kind']}, score {c['score']}) {c.get('description', '')}".rstrip()
         for n, c in enumerate(cands, 1)
     ]
-    lines.append("Reply with a number to choose, or 'cancel'.")
+    lines.append("Choose by number, or type 'cancel'.")
     _say(ctx, "\n".join(lines))
 
     index = 0
@@ -325,6 +326,52 @@ def _replaced(ctx: UnitContext, p: dict) -> None:
     )
 
 
+def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> None:
+    payload = reply.payload or {}
+    if reply.verb == "agent.error":
+        _say(ctx, f"{name} rejected the {action} request: {payload.get('reason', payload)}")
+        return
+    if reply.verb not in {"agent.started", "agent.stopped", "agent.heartbeat", "agent.status"}:
+        _say(ctx, f"{name} replied with {reply.verb!r} while I was handling {action!r}.")
+        return
+    state = payload.get("state", "unknown")
+    if action == "status":
+        started = payload.get("started_at")
+        heartbeat = payload.get("last_heartbeat")
+        stopped = payload.get("stopped_at")
+        parts = [f"{name}: state={state}"]
+        if started is not None:
+            parts.append(f"started={started}")
+        if heartbeat is not None:
+            parts.append(f"heartbeat={heartbeat}")
+        if stopped is not None:
+            parts.append(f"stopped={stopped}")
+        _say(ctx, ", ".join(parts))
+        return
+    _say(ctx, f"{name} is {state}.")
+
+
+def _agent_command(ctx: UnitContext, rest: list[str]) -> None:
+    if not rest:
+        _say(ctx, "Use '/agent <name> [start|status|heartbeat|stop]' to manage a simple agent lifecycle.")
+        return
+    name = rest[0]
+    action = (rest[1].lower() if len(rest) > 1 else "status")
+    if action not in {"start", "status", "heartbeat", "stop"}:
+        _say(ctx, f"{action!r} is not a valid agent action. Use start, status, heartbeat, or stop.")
+        return
+
+    def on_unit(c: UnitContext, unit: dict) -> None:
+        target = unit.get("unit_id")
+        send_cap = c.hold(Right.SEND, target)
+        if send_cap is None:
+            _say(c, f"I hold no SEND authority for {unit.get('name', target)}.")
+            return
+        c.request(target, f"agent.{action}", {"name": unit.get("name", "")}, (send_cap,), then=lambda c2, reply: _agent_result(c2, reply, unit.get("name", ""), action))
+
+    _with_unit(ctx, name, on_unit)
+
+
 def _input(ctx: UnitContext, text: str) -> None:
     text = (text or "").strip()
     pending = ctx.mem["pending"]
@@ -375,6 +422,9 @@ def _command(ctx: UnitContext, text: str) -> None:
 
     elif cmd == "objects":
         _list_objects(ctx)
+
+    elif cmd == "agent":
+        _agent_command(ctx, rest)
 
     elif cmd == "status":
         _status(ctx)
@@ -593,10 +643,12 @@ def _status(ctx: UnitContext) -> None:
         temp_snapshot = False
         if storage_path:
             temp_snapshot = __import__("pathlib").Path(storage_path).with_suffix(f"{__import__('pathlib').Path(storage_path).suffix}.tmp").exists()
+        agent_count = sum(1 for row in rows if row.get("kind") == "agent")
         lines = [
             "Origin status",
             f"  step: {c.step}",
             f"  units: {len(rows)}",
+            f"  agents: {agent_count}",
             f"  focus: {focus_name}",
             f"  storage: {storage_path or 'memory'}",
             f"  temp snapshot: {'present' if temp_snapshot else 'clean'}",
@@ -652,6 +704,19 @@ def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:
                 f"born {u.get('born_step',0):>3}  crashes {u.get('crashes',0)}  "
                 f"preempted {u.get('preemptions',0)}  caps {u.get('caps_held',0)}  "
                 f"inbox {u.get('inbox_depth',0)}  {mask(str(u.get('unit_id','')))}"
+            )
+        _say(ctx, "\n".join(lines))
+        return
+
+    if what == "agents":
+        rows = p.get("agents", [])
+        lines = [f"{len(rows)} Agents:"]
+        for u in sorted(rows, key=lambda r: r.get("born_step", 0)):
+            lines.append(
+                f"  {u.get('name',''):<12} {u.get('state',''):<8} "
+                f"started {u.get('started_at', '-') if u.get('started_at') is not None else '-'}  "
+                f"heartbeat {u.get('last_heartbeat', '-') if u.get('last_heartbeat') is not None else '-'}  "
+                f"{mask(str(u.get('unit_id','')))}"
             )
         _say(ctx, "\n".join(lines))
         return

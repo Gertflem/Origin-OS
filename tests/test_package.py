@@ -315,6 +315,73 @@ class TestPackage(unittest.TestCase):
         self.assertTrue(plan["resolved"])
         self.assertEqual(plan["steps"][0]["target"], "obj-beach")
 
+    def test_propose_choice_names_close_matches_for_ambiguity(self):
+        from origin.units.console import _propose_choice
+
+        class DummyCtx:
+            def __init__(self):
+                self.mem = {}
+                self.last_text = ""
+
+            def send(self, *args, **kwargs):
+                payload = kwargs.get("payload") or (args[2] if len(args) > 2 else {})
+                text = payload.get("text", "") if isinstance(payload, dict) else ""
+                self.last_text = text
+                return None
+
+        ctx = DummyCtx()
+        plan = {"steps": [{"target": None, "target_phrase": "beach photo"}]}
+        amb = {
+            "role": "target",
+            "phrase": "beach photo",
+            "candidates": [
+                {"name": "beach photo", "kind": "object", "score": 0.91, "description": "coastal"},
+                {"name": "beach portrait", "kind": "object", "score": 0.89, "description": "portrait"},
+            ],
+        }
+
+        _propose_choice(ctx, plan, amb)
+        output = ctx.last_text.lower()
+        self.assertIn("closest matches", output)
+        self.assertIn("choose by number", output)
+
+    def test_agent_unit_tracks_lifecycle_state(self):
+        from origin.core.bootstrap import boot
+        from origin.core.unit import UnitContext
+        from origin.message import Message
+
+        system = boot()
+        unit = system.nucleus.birth("agent", "demo-agent", "agent")
+        ctx = UnitContext(unit, system.nucleus)
+
+        unit.handler(ctx, Message(sender="console:live", recipient=unit.unit_id, verb="agent.start"))
+        self.assertEqual(unit.arena.get("state"), "running")
+        self.assertGreaterEqual(unit.arena.get("started_at", -1), unit.born_step)
+
+        unit.handler(ctx, Message(sender="console:live", recipient=unit.unit_id, verb="agent.heartbeat"))
+        self.assertEqual(unit.arena.get("state"), "running")
+        self.assertGreaterEqual(unit.arena.get("last_heartbeat", -1), unit.arena.get("started_at", -1))
+
+        unit.handler(ctx, Message(sender="console:live", recipient=unit.unit_id, verb="agent.stop"))
+        self.assertEqual(unit.arena.get("state"), "stopped")
+
+    def test_agent_registry_reports_live_monitoring_state(self):
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+
+        system = boot()
+        agent = system.nucleus.birth("agent", "live-agent", "agent")
+
+        agent.arena["state"] = "running"
+        agent.arena["started_at"] = 12
+        agent.arena["last_heartbeat"] = 15
+
+        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        self.assertEqual(report["agents"][0]["name"], "live-agent")
+        self.assertEqual(report["agents"][0]["state"], "running")
+        self.assertEqual(report["agents"][0]["started_at"], 12)
+        self.assertEqual(report["agents"][0]["last_heartbeat"], 15)
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 

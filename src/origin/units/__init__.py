@@ -17,11 +17,12 @@ about it. `bootstrap` only has to import this package once.
 """
 
 from ..unit import UNIT_TYPES, unit_type
-from . import console, demo, improver, naming, object_store, watcher  # noqa: F401
+from . import agent, console, demo, improver, naming, object_store, watcher  # noqa: F401
 
 __all__ = [
     "UNIT_TYPES",
     "unit_type",
+    "agent",
     "console",
     "demo",
     "improver",
