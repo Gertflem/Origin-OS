@@ -445,10 +445,15 @@ class ObjectStore:
         note forever, and the compaction itself is appended as a new version
         naming exactly what it reclaimed — so the history still accounts for
         every moment it ever had (invariant 7).
+
+        The newest version must always be retained, even if a caller requests a
+        zero-count retention window; otherwise the object can lose its current
+        effective state while still pretending to be durable.
         """
         obj = self._object(object_id)
         self._check(cap, Right.PIN, object_id, holder)
 
+        keep_recent = max(1, int(keep_recent))
         cutoff = obj.latest_seq - keep_recent
         reclaimed: list[int] = []
         for v in obj.versions:
@@ -469,6 +474,7 @@ class ObjectStore:
                 },
                 note=f"compacted {len(reclaimed)} version payload(s); metadata retained",
                 step=obj.versions[-1].step,
+                acked=True,
             )
         self._persist()
         return {"reclaimed": reclaimed, "pins_preserved": sorted(obj.pins)}

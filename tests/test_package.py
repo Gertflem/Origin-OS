@@ -76,6 +76,25 @@ class TestPackage(unittest.TestCase):
             self.assertEqual(loaded.payload, {"text": "first"})
             self.assertEqual(second.read("alice", obj.object_id, cap).payload, {"text": "second"})
 
+    def test_compact_keeps_latest_version_when_keep_recent_is_zero(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import CompactedError, ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-compact")
+        store = ObjectStore(validator)
+
+        obj = store.create("alice", "journal", {"text": "first"}, cap, step=1)
+        store.append("alice", obj.object_id, {"text": "second"}, cap, step=2)
+        store.append("alice", obj.object_id, {"text": "third"}, cap, step=3)
+
+        result = store.compact("alice", obj.object_id, cap, keep_recent=0)
+        self.assertEqual(result["reclaimed"], [0, 1])
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"text": "third"})
+        self.assertEqual(store.read("alice", obj.object_id, cap).payload["kind"], "compaction")
+        with self.assertRaises(CompactedError):
+            store.read("alice", obj.object_id, cap, seq=0)
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 
