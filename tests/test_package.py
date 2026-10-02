@@ -95,6 +95,40 @@ class TestPackage(unittest.TestCase):
             fsync.assert_called()
             replace.assert_called_once()
 
+    def test_object_store_recovers_from_stale_tmp_snapshot(self):
+        import json
+
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-recover")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            tmp_path = path.with_suffix(".json.tmp")
+            snapshot = {
+                "obj-123": {
+                    "kind": "journal",
+                    "created_step": 1,
+                    "versions": [{
+                        "seq": 0,
+                        "payload": {"text": "first"},
+                        "author": "alice",
+                        "step": 1,
+                        "note": "genesis",
+                        "acked": True,
+                    }],
+                    "pins": [],
+                    "compacted": [],
+                    "preferred": None,
+                }
+            }
+            tmp_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+            recovered = ObjectStore(validator, storage_path=path)
+            self.assertEqual(recovered.read("alice", "obj-123", cap, seq=0).payload, {"text": "first"})
+
     def test_compact_keeps_latest_version_when_keep_recent_is_zero(self):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore

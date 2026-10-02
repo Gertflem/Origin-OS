@@ -180,7 +180,7 @@ class ObjectStore:
         self._storage_path = Path(storage_path) if storage_path is not None else None
         if self._storage_path is not None:
             self._storage_path.parent.mkdir(parents=True, exist_ok=True)
-            if self._storage_path.exists():
+            if self._storage_path.exists() or self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp").exists():
                 self._load()
 
     def _snapshot(self) -> dict[str, dict]:
@@ -225,9 +225,16 @@ class ObjectStore:
             pass
 
     def _load(self) -> None:
-        if self._storage_path is None or not self._storage_path.exists():
+        if self._storage_path is None:
             return
-        with open(self._storage_path, "r", encoding="utf-8") as handle:
+        candidate = self._storage_path
+        if not candidate.exists():
+            tmp = candidate.with_suffix(f"{candidate.suffix}.tmp")
+            if tmp.exists():
+                candidate = tmp
+        if not candidate.exists():
+            return
+        with open(candidate, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         self._objects = {}
         for object_id, item in payload.items():
