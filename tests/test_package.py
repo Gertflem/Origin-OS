@@ -211,6 +211,25 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin caps", output)
         self.assertIn("capability", output.lower())
 
+    def test_caps_command_marks_revoked_capabilities(self):
+        from origin.ids import HUMAN, NUCLEUS
+        from origin.main import _handle, boot
+        from origin.capability import Right
+
+        system = boot()
+        cap = system.nucleus.mint(
+            (Right.READ,), "photo:beach", HUMAN, "alice", authority=system.guardian, label="beach read"
+        )
+        system.nucleus.revoke(cap, NUCLEUS, "security review")
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/caps")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("revoked", output)
+        self.assertIn("beach read", output.lower())
+
     def test_audit_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

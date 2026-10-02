@@ -232,7 +232,7 @@ def _handle(system: System, line: str) -> bool:
         _names(system)
         return True
     if parts[0].lower() == "/caps":
-        _caps(system)
+        _caps(system, parts[1:])
         return True
     if parts[0].lower() == "/audit":
         _audit(system, parts[1:])
@@ -417,20 +417,30 @@ def _names(system: System) -> None:
         )
 
 
-def _caps(system: System) -> None:
+def _caps(system: System, args: list[str] | None = None) -> None:
     rows = list(getattr(system.nucleus, "_caps", {}).values())
+    live_only = bool(args and args[0].lower() in {"live", "active"})
+    if live_only:
+        rows = [rec for rec in rows if not rec.revoked and rec.live_at(system.nucleus.current_step())]
+
     print("Origin caps")
     print("  capability registry")
+    print(f"  mode: {'live' if live_only else 'all'}")
     print(f"  total: {len(rows)} capabilities")
     for rec in sorted(rows, key=lambda item: (item.created_step, item.cap_id)):
         rights = "+".join(sorted(r.value for r in rec.rights)) or "-"
         holders = ", ".join(mask(str(holder)) for holder in sorted(rec.holders)) or "-"
         target = mask(str(rec.target)) if rec.target else "(namespace)"
         lifetime = f"expires {rec.expires_at_step}" if rec.expires_at_step is not None else "permanent"
-        state = "  REVOKED" if rec.revoked else ""
+        if rec.revoked:
+            state = "revoked"
+        elif rec.live_at(system.nucleus.current_step()):
+            state = "live"
+        else:
+            state = "expired"
         print(
             "  "
-            f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {rec.label}{state}"
+            f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {state:<8} {rec.label}"
         )
 
 
