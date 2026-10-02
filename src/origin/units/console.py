@@ -331,7 +331,7 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
     if reply.verb == "agent.error":
         _say(ctx, f"{name} rejected the {action} request: {payload.get('reason', payload)}")
         return
-    if reply.verb not in {"agent.started", "agent.stopped", "agent.heartbeat", "agent.status"}:
+    if reply.verb not in {"agent.started", "agent.stopped", "agent.heartbeat", "agent.failed", "agent.recovered", "agent.status"}:
         _say(ctx, f"{name} replied with {reply.verb!r} while I was handling {action!r}.")
         return
     state = payload.get("state", "unknown")
@@ -339,6 +339,8 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
         started = payload.get("started_at")
         heartbeat = payload.get("last_heartbeat")
         stopped = payload.get("stopped_at")
+        failed = payload.get("failed_at")
+        reason = payload.get("failure_reason")
         tools = payload.get("tools") or []
         scope = payload.get("memory_scope")
         parts = [f"{name}: state={state}"]
@@ -348,6 +350,10 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
             parts.append(f"heartbeat={heartbeat}")
         if stopped is not None:
             parts.append(f"stopped={stopped}")
+        if failed is not None:
+            parts.append(f"failed={failed}")
+        if reason is not None:
+            parts.append(f"reason={reason}")
         if tools:
             parts.append(f"tools={','.join(tools)}")
         if scope is not None:
@@ -356,12 +362,15 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
         return
     tools = payload.get("tools") or []
     scope = payload.get("memory_scope")
-    if tools or scope is not None:
+    reason = payload.get("failure_reason")
+    if tools or scope is not None or reason is not None:
         detail = ""
         if tools:
             detail += f" tools={','.join(tools)}"
         if scope is not None:
             detail += f" scope={scope}"
+        if reason is not None:
+            detail += f" reason={reason}"
         _say(ctx, f"{name} is {state}.{detail}")
         return
     _say(ctx, f"{name} is {state}.")
@@ -369,12 +378,12 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
 
 def _agent_command(ctx: UnitContext, rest: list[str]) -> None:
     if not rest:
-        _say(ctx, "Use '/agent <name> [start|status|heartbeat|stop]' to manage a simple agent lifecycle.")
+        _say(ctx, "Use '/agent <name> [start|status|heartbeat|fail|recover|stop]' to manage a simple agent lifecycle.")
         return
     name = rest[0]
     action = (rest[1].lower() if len(rest) > 1 else "status")
-    if action not in {"start", "status", "heartbeat", "stop"}:
-        _say(ctx, f"{action!r} is not a valid agent action. Use start, status, heartbeat, or stop.")
+    if action not in {"start", "status", "heartbeat", "fail", "recover", "stop"}:
+        _say(ctx, f"{action!r} is not a valid agent action. Use start, status, heartbeat, fail, recover, or stop.")
         return
 
     def on_unit(c: UnitContext, unit: dict) -> None:

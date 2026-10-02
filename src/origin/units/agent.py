@@ -21,6 +21,9 @@ def agent_handler(ctx, msg):
         ctx.mem["state"] = "running"
         ctx.mem["started_at"] = ctx.step
         ctx.mem["last_heartbeat"] = ctx.step
+        ctx.mem.pop("failure_reason", None)
+        ctx.mem.pop("failed_at", None)
+        ctx.mem.pop("recovered_at", None)
         ctx.mem["tools"] = list(payload.get("tools") or ctx.mem.get("tools", []))
         if payload.get("memory_scope") is not None:
             ctx.mem["memory_scope"] = payload["memory_scope"]
@@ -53,6 +56,47 @@ def agent_handler(ctx, msg):
             )
         return
 
+    if verb == "agent.fail":
+        payload = msg.payload or {}
+        ctx.mem["state"] = "failed"
+        ctx.mem["failed_at"] = ctx.step
+        ctx.mem["failure_reason"] = payload.get("reason") or "unknown"
+        if payload.get("replaced_by") is not None:
+            ctx.mem["replaced_by"] = payload["replaced_by"]
+        if msg.reply_to is not None:
+            ctx.respond(
+                msg,
+                "agent.failed",
+                {
+                    "state": "failed",
+                    "failed_at": ctx.mem["failed_at"],
+                    "failure_reason": ctx.mem["failure_reason"],
+                    "tools": ctx.mem.get("tools", []),
+                    "memory_scope": ctx.mem.get("memory_scope"),
+                    "replaced_by": ctx.mem.get("replaced_by"),
+                },
+            )
+        return
+
+    if verb == "agent.recover":
+        ctx.mem["state"] = "running"
+        ctx.mem["recovered_at"] = ctx.step
+        ctx.mem.pop("failure_reason", None)
+        ctx.mem.pop("failed_at", None)
+        ctx.mem["last_heartbeat"] = ctx.step
+        if msg.reply_to is not None:
+            ctx.respond(
+                msg,
+                "agent.recovered",
+                {
+                    "state": "running",
+                    "recovered_at": ctx.mem["recovered_at"],
+                    "tools": ctx.mem.get("tools", []),
+                    "memory_scope": ctx.mem.get("memory_scope"),
+                },
+            )
+        return
+
     if verb == "agent.stop":
         ctx.mem["state"] = "stopped"
         ctx.mem["stopped_at"] = ctx.step
@@ -66,6 +110,10 @@ def agent_handler(ctx, msg):
             "started_at": ctx.mem.get("started_at"),
             "last_heartbeat": ctx.mem.get("last_heartbeat"),
             "stopped_at": ctx.mem.get("stopped_at"),
+            "failed_at": ctx.mem.get("failed_at"),
+            "failure_reason": ctx.mem.get("failure_reason"),
+            "recovered_at": ctx.mem.get("recovered_at"),
+            "replaced_by": ctx.mem.get("replaced_by"),
             "tools": ctx.mem.get("tools", []),
             "memory_scope": ctx.mem.get("memory_scope"),
         }

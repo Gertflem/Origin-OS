@@ -399,6 +399,28 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(target["tools"], ["read", "write"])
         self.assertEqual(target["memory_scope"]["max_bytes"], 128)
 
+    def test_agent_failure_and_replacement_metadata_are_reported(self):
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+        from origin.core.unit import UnitContext
+        from origin.message import Message
+
+        system = boot()
+        unit = system.nucleus.birth("agent", "flaky-agent", "agent")
+        ctx = UnitContext(unit, system.nucleus)
+
+        unit.handler(ctx, Message(sender="watcher:probe", recipient=unit.unit_id, verb="agent.fail", payload={"reason": "timeout"}))
+        self.assertEqual(unit.arena.get("state"), "failed")
+        self.assertEqual(unit.arena.get("failure_reason"), "timeout")
+        self.assertIsNotNone(unit.arena.get("failed_at"))
+
+        unit.arena["replaced_by"] = "replacement-agent"
+        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        target = next(item for item in report["agents"] if item["name"] == "flaky-agent")
+        self.assertEqual(target["state"], "failed")
+        self.assertEqual(target["failure_reason"], "timeout")
+        self.assertEqual(target["replaced_by"], "replacement-agent")
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 
