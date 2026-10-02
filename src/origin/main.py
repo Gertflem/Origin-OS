@@ -405,11 +405,12 @@ def _objects(system: System) -> None:
     print("Origin objects")
     print(f"  total: {len(rows)}")
     for obj in sorted(rows, key=lambda item: (item.get("kind", ""), item.get("object_id", ""))):
+        compacted = obj.get("compacted", [])
         print(
             "  "
             f"{mask(str(obj.get('object_id', ''))):<20} {obj.get('kind', ''):<10} "
             f"versions {obj.get('versions', 0):>3}  latest {obj.get('latest_seq', 0):>3}  "
-            f"preferred {obj.get('preferred')}  pins {obj.get('pins', [])}"
+            f"preferred {obj.get('preferred')}  pins {obj.get('pins', [])}  compacted {list(compacted)}"
         )
 
 

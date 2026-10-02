@@ -241,6 +241,31 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(summary["compacted"], 2)
         self.assertEqual(summary["preferred"], 0)
 
+    def test_objects_command_reports_compaction_state(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+        from origin.main import _handle, boot
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-compact-view")
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"text": "first"}, cap, step=1)
+        store.append("alice", obj.object_id, {"text": "second"}, cap, step=2)
+        store.append("alice", obj.object_id, {"text": "third"}, cap, step=3)
+        store.compact("alice", obj.object_id, cap, keep_recent=1)
+
+        system = boot()
+        object_store = getattr(system, "store", None)
+        object_store._objects = store._objects
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/objects")
+
+        self.assertTrue(result)
+        output = buffer.getvalue().lower()
+        self.assertIn("compacted", output)
+
     def test_status_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
