@@ -104,6 +104,10 @@ Origin/
         └── tests.yml
 ```
 
+## Why not just use [X]?
+
+Origin is the reference design — the readable, runnable, constitutionally-grounded model. Other projects implement pieces of this; nobody has written the whole picture down as a coherent whole.
+
 ## Development philosophy
 
 Origin follows a constitution-first approach:
