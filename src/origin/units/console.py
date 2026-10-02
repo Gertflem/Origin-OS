@@ -394,7 +394,7 @@ def _command(ctx: UnitContext, text: str) -> None:
             _propose(
                 ctx,
                 f"spawn {kind} {name}",
-                ["SPAWN on the namespace, granted to me, expires in {_lifetime(ctx)} steps"],
+                [f"SPAWN on the namespace, granted to me, expires in {_lifetime(ctx)} steps"],
                 {"op": "spawn", "kind": kind, "name": name, "entry": entry, "params": {}},
             )
 
@@ -796,6 +796,12 @@ def _core_result(ctx: UnitContext, reply: Message, action: dict) -> None:
     if reply.verb != f"{action['verb']}.result":
         _say(ctx, f"REFUSED: the Nucleus would not {action['verb']} {action['name']} — {p.get('reason', p)}")
         return
+    if action.get("verb") == "spawn":
+        unit_id = p.get("unit_id")
+        name = p.get("name")
+        if unit_id and name:
+            _set_focus(ctx, unit_id, name)
+            _say(ctx, f"'this' and 'it' now refer to {name} ({mask(unit_id)}).")
     _say(ctx, f"{action['name']} {action['done']}.")
 
 
