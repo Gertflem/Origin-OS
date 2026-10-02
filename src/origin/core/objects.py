@@ -30,7 +30,10 @@ backing store is memory.
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import constitution
@@ -154,6 +157,14 @@ class Object:
 Validator = Callable[[Capability, Right, Optional[str], str], Any]
 
 
+def _json_default(value: Any) -> Any:
+    if isinstance(value, set):
+        return sorted(value)
+    if hasattr(value, "__dict__"):
+        return value.__dict__
+    return str(value)
+
+
 class ObjectStore:
     """Capability-gated append-only storage.
 
@@ -163,9 +174,73 @@ class ObjectStore:
     Objects either (invariant 2).
     """
 
-    def __init__(self, validator: Validator) -> None:
+    def __init__(self, validator: Validator, *, storage_path: Optional[str | os.PathLike[str]] = None) -> None:
         self._objects: dict[str, Object] = {}
         self._validate = validator
+        self._storage_path = Path(storage_path) if storage_path is not None else None
+        if self._storage_path is not None:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            if self._storage_path.exists():
+                self._load()
+
+    def _snapshot(self) -> dict[str, dict]:
+        return {
+            object_id: {
+                "kind": obj.kind,
+                "created_step": obj.created_step,
+                "versions": [
+                    {
+                        "seq": v.seq,
+                        "payload": v.payload,
+                        "author": v.author,
+                        "step": v.step,
+                        "note": v.note,
+                        "acked": v.acked,
+                    }
+                    for v in obj.versions
+                ],
+                "pins": sorted(obj.pins),
+                "compacted": sorted(obj.compacted),
+                "preferred": obj.preferred,
+            }
+            for object_id, obj in self._objects.items()
+        }
+
+    def _persist(self) -> None:
+        if self._storage_path is None:
+            return
+        tmp_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(self._snapshot(), handle, sort_keys=True, default=_json_default)
+        os.replace(tmp_path, self._storage_path)
+
+    def _load(self) -> None:
+        if self._storage_path is None or not self._storage_path.exists():
+            return
+        with open(self._storage_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self._objects = {}
+        for object_id, item in payload.items():
+            obj = Object(
+                object_id=object_id,
+                kind=item["kind"],
+                created_step=item.get("created_step", 0),
+            )
+            obj.versions = [
+                Version(
+                    seq=v["seq"],
+                    payload=v["payload"],
+                    author=v["author"],
+                    step=v["step"],
+                    note=v.get("note", ""),
+                    acked=v.get("acked", True),
+                )
+                for v in item.get("versions", [])
+            ]
+            obj.pins = set(item.get("pins", []))
+            obj.compacted = set(item.get("compacted", []))
+            obj.preferred = item.get("preferred")
+            self._objects[object_id] = obj
 
     # --- authority -------------------------------------------------------
     def _check(self, cap: Optional[Capability], right: Right, target: Optional[str], holder: str) -> None:
@@ -202,6 +277,7 @@ class ObjectStore:
             Version(seq=0, payload=payload, author=holder, step=step, note=note or "genesis", acked=acked)
         )
         self._objects[oid] = obj
+        self._persist()
         return obj
 
     def append(
@@ -226,6 +302,7 @@ class ObjectStore:
     def _do_append(self, obj: Object, holder: str, payload: Any, note: str, step: int, acked: bool) -> Version:
         v = Version(seq=obj.latest_seq + 1, payload=payload, author=holder, step=step, note=note, acked=acked)
         obj.versions.append(v)
+        self._persist()
         return v
 
     # --- read path -------------------------------------------------------
@@ -278,6 +355,7 @@ class ObjectStore:
             acked=acked,
         )
         obj.versions[idx] = updated
+        self._persist()
         return updated
 
     def durable_versions(self, holder: str, object_id: str, cap: Optional[Capability]) -> list[Version]:
@@ -344,6 +422,7 @@ class ObjectStore:
         self._check(cap, Right.PIN, object_id, holder)
         obj.get(seq)  # raises if the version never existed
         obj.pins.add(seq)
+        self._persist()
 
     def prefer(self, holder: str, object_id: str, seq: int, cap: Optional[Capability]) -> None:
         """Mark a version as the one consumers should use.
@@ -356,6 +435,7 @@ class ObjectStore:
         self._check(cap, Right.APPEND, object_id, holder)
         obj.get(seq)
         obj.preferred = seq
+        self._persist()
 
     def compact(self, holder: str, object_id: str, cap: Optional[Capability], *, keep_recent: int = 3) -> dict:
         """Reclaim payloads of old, unpinned versions.
@@ -390,4 +470,5 @@ class ObjectStore:
                 note=f"compacted {len(reclaimed)} version payload(s); metadata retained",
                 step=obj.versions[-1].step,
             )
+        self._persist()
         return {"reclaimed": reclaimed, "pins_preserved": sorted(obj.pins)}

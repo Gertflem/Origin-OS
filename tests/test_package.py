@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,24 @@ class TestPackage(unittest.TestCase):
         store.acknowledge("alice", obj.object_id, v2.seq, cap, acked=False, note="not yet durable")
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
+
+    def test_object_store_persists_across_restarts(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-persist")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            first = ObjectStore(validator, storage_path=path)
+            obj = first.create("alice", "journal", {"text": "first"}, cap, step=1)
+            first.append("alice", obj.object_id, {"text": "second"}, cap, step=2)
+
+            second = ObjectStore(validator, storage_path=path)
+            loaded = second.read("alice", obj.object_id, cap, seq=0)
+            self.assertEqual(loaded.payload, {"text": "first"})
+            self.assertEqual(second.read("alice", obj.object_id, cap).payload, {"text": "second"})
 
     def test_cli_help(self):
         env = os.environ.copy()
