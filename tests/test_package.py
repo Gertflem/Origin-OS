@@ -131,6 +131,61 @@ class TestPackage(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertFalse(tmp_path.exists())
 
+    def test_object_store_prefers_newer_tmp_snapshot_over_stale_main_file(self):
+        import json
+
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-prefer-tmp")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            tmp_path = path.with_suffix(".json.tmp")
+
+            stale = {
+                "obj-old": {
+                    "kind": "journal",
+                    "created_step": 1,
+                    "versions": [{
+                        "seq": 0,
+                        "payload": {"text": "stale"},
+                        "author": "alice",
+                        "step": 1,
+                        "note": "old",
+                        "acked": True,
+                    }],
+                    "pins": [],
+                    "compacted": [],
+                    "preferred": None,
+                }
+            }
+            fresh = {
+                "obj-new": {
+                    "kind": "journal",
+                    "created_step": 2,
+                    "versions": [{
+                        "seq": 0,
+                        "payload": {"text": "fresh"},
+                        "author": "alice",
+                        "step": 2,
+                        "note": "newer",
+                        "acked": True,
+                    }],
+                    "pins": [],
+                    "compacted": [],
+                    "preferred": None,
+                }
+            }
+            path.write_text(json.dumps(stale), encoding="utf-8")
+            tmp_path.write_text(json.dumps(fresh), encoding="utf-8")
+
+            recovered = ObjectStore(validator, storage_path=path)
+            self.assertEqual(recovered.read("alice", "obj-new", cap, seq=0).payload, {"text": "fresh"})
+            self.assertTrue(path.exists())
+            self.assertFalse(tmp_path.exists())
+
     def test_compact_keeps_latest_version_when_keep_recent_is_zero(self):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore

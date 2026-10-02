@@ -230,10 +230,17 @@ class ObjectStore:
         candidate = self._storage_path
         tmp = candidate.with_suffix(f"{candidate.suffix}.tmp")
         promoted = False
-        if not candidate.exists() and tmp.exists():
-            os.replace(tmp, candidate)
-            promoted = True
-            candidate = self._storage_path
+
+        if tmp.exists():
+            if not candidate.exists() or tmp.stat().st_mtime_ns >= candidate.stat().st_mtime_ns:
+                os.replace(tmp, candidate)
+                promoted = True
+            else:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         if not candidate.exists():
             return
         with open(candidate, "r", encoding="utf-8") as handle:
