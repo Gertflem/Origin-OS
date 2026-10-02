@@ -219,6 +219,21 @@ class TestPackage(unittest.TestCase):
         self.assertIn("temp", output)
         self.assertIn("snapshot", output)
 
+    def test_status_reports_current_focus(self):
+        from origin.main import _status, boot
+
+        system = boot()
+        console = system.nucleus._units[system.console]
+        console.arena["focus"] = {"name": "beach", "object_id": "obj-demo"}
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _status(system)
+
+        output = buffer.getvalue().lower()
+        self.assertIn("focus", output)
+        self.assertIn("beach", output)
+
     def test_object_store_reports_retention_summary(self):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
