@@ -53,7 +53,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /objects  /units  /names  /caps  /audit  /powers
+  Inspect freely:      /status  /objects  /units  /names  /caps  /audit  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
@@ -221,6 +221,9 @@ def _handle(system: System, line: str) -> bool:
     parts = text.split()
     if parts[0].lower() == "/status":
         _status(system)
+        return True
+    if parts[0].lower() == "/help":
+        print(BANNER)
         return True
     if parts[0].lower() == "/revoke":
         _revoke(system, parts[1:])
