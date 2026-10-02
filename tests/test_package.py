@@ -282,6 +282,25 @@ class TestPackage(unittest.TestCase):
         self.assertGreaterEqual(score(binding, "the beach photo."), 0.9)
         self.assertGreaterEqual(score(binding, "beach pic!"), 0.9)
 
+    def test_parse_compound_intent_handles_punctuation_and_recipient(self):
+        from origin.units.naming import _parse
+
+        def resolve_phrase(phrase, kind):
+            if kind == "object":
+                if phrase in {"the beach photo", "beach photo", "it"}:
+                    return "obj-beach", 1.0, []
+                return None, 0.0, []
+            if kind == "contact":
+                if phrase == "david":
+                    return "contact-david", 1.0, []
+                return None, 0.0, []
+            return None, 0.0, []
+
+        plan = _parse("brighten the beach photo and send it to David.", {"object_id": "obj-beach"}, resolve_phrase)
+        self.assertTrue(plan["resolved"])
+        self.assertEqual(len(plan["steps"]), 2)
+        self.assertEqual(plan["steps"][1]["recipient"], "contact-david")
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 

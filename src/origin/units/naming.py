@@ -161,13 +161,14 @@ def extract_modifier(clause: str) -> tuple[float | None, str]:
     ambiguity — nothing in the namespace is named "by 20". Extracted before the
     recipient because "resize to 0.5" would otherwise resolve "0.5" as a contact.
     """
-    m = MODIFIER.search(clause.strip().lower())
+    clean = normalize_phrase(clause)
+    m = MODIFIER.search(clean)
     if not m:
         return None, clause
     value = float(m.group(1))
     if m.group(2):
         value /= 100.0
-    return value, clause[: m.start()].strip()
+    return value, clean[: m.start()].strip()
 
 
 def score(binding: Binding, phrase: str) -> float:
@@ -267,15 +268,16 @@ def match_verb(words: list[str]) -> IntentVerb | None:
 
 def extract_recipient(clause: str) -> tuple[str | None, str]:
     """Pull "to David" out of a clause, returning (recipient, remaining text)."""
-    m = re.search(r"\b(?:to|for)\s+([a-z0-9' ]+)$", clause.strip().lower())
+    clean = normalize_phrase(clause)
+    m = re.search(r"\b(?:to|for)\s+([a-z0-9' ]+)$", clean)
     if not m:
         return None, clause
-    return m.group(1).strip(), clause[: m.start()].strip()
+    return m.group(1).strip(), clean[: m.start()].strip()
 
 
 def strip_verb(clause: str, iv: IntentVerb) -> str:
     """Remove the action words and filler, leaving the target phrase."""
-    out = clause.lower()
+    out = normalize_phrase(clause)
     for syn in sorted(iv.words, key=len, reverse=True):
         out = re.sub(rf"\b{re.escape(syn)}\b", " ", out)
     out = re.sub(r"\b(?:make|please|could you|can you|i want to|turn|get|set)\b", " ", out)
