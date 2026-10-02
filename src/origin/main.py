@@ -237,6 +237,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/audit":
         _audit(system, parts[1:])
         return True
+    if parts[0].lower() in ("/watcher", "/improver"):
+        _to_console(system, " ".join(parts))
+        return True
     if parts[0].lower() == "/history":
         _history(system)
         return True

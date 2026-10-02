@@ -60,6 +60,8 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /units             every Unit, its state and its crash count
     /caps              every Capability ever minted, redacted
     /audit [n]         the last n core events
+    /watcher [n]       the last n containment and escalation events
+    /improver [n]      the last n repair decisions and attempts
     /powers            the Nucleus's own account of its powers
 
   actions (proposed first, executed only on 'confirm')
@@ -375,6 +377,9 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd in ("units", "caps", "audit", "powers"):
         _inspect_core(ctx, cmd, rest)
 
+    elif cmd in ("watcher", "improver"):
+        _inspect_unit(ctx, cmd, rest)
+
     elif cmd == "focus":
         if not arg:
             _say(ctx, f"focus: {_render(ctx.mem['focus']) or 'nothing'}")
@@ -509,6 +514,57 @@ def _inspect_core(ctx: UnitContext, what: str, rest: list[str]) -> None:
         _show_inspection(c, what, p)
 
     ctx.request(NUCLEUS, "inspect", payload, (cap,), then=shown)
+
+
+def _inspect_unit(ctx: UnitContext, what: str, rest: list[str]) -> None:
+    cap = _audit_cap(ctx)
+    if cap is None:
+        return
+
+    service_name = "watcher" if what == "watcher" else "improver"
+    service = _services(ctx).get(service_name)
+    if service is None:
+        _say(ctx, f"No {what} Unit is running, so there is nothing to inspect.")
+        return
+
+    verb = "watcher.report" if what == "watcher" else "improve.report"
+    limit = int(rest[0]) if rest and rest[0].isdigit() else 20
+
+    def shown(c: UnitContext, reply: Message) -> None:
+        p = reply.payload or {}
+        if reply.verb.endswith(".denied"):
+            _say(c, f"{what} denied the report: {p.get('reason', p)}")
+            return
+        if reply.verb != f"{verb}.result":
+            _say(c, f"{what} report failed: {reply.verb} {p}")
+            return
+
+        lines = [f"Origin {what}"]
+        if what == "watcher":
+            events = p.get("events", [])
+            escalations = p.get("escalations", {})
+            lines.append(f"  {len(events)} events")
+            if escalations:
+                lines.append(f"  escalations: {escalations}")
+            for entry in events[-limit:]:
+                detail = entry.get("detail")
+                detail_text = _render(detail) if detail is not None else ""
+                lines.append(f"  step {entry.get('at_step', 0):>4}  {entry.get('event', 'event'):<20} {detail_text}".rstrip())
+        else:
+            decisions = p.get("decisions", [])
+            attempts = p.get("attempts", {})
+            lines.append(f"  {len(decisions)} decisions")
+            if attempts:
+                lines.append(f"  attempts: {attempts}")
+            for entry in decisions[-limit:]:
+                reason = entry.get("reason")
+                lines.append(
+                    f"  step {entry.get('at_step', 0):>4}  {entry.get('event', 'event'):<16} {entry.get('kind', '')} "
+                    f"{entry.get('unit_id', '')} {reason or ''}".rstrip()
+                )
+        _say(c, "\n".join(lines))
+
+    ctx.request(service, verb, {"limit": limit}, (cap,), then=shown)
 
 
 def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:

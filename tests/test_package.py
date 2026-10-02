@@ -305,6 +305,21 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin audit", output)
         self.assertIn("event", output.lower())
 
+    def test_watcher_and_improver_reports_are_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/watcher")
+            _handle(system, "/improver")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("origin watcher", output)
+        self.assertIn("events", output)
+        self.assertIn("origin improver", output)
+        self.assertIn("decisions", output)
+
     def test_powers_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
