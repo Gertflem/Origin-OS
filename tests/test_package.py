@@ -95,6 +95,33 @@ class TestPackage(unittest.TestCase):
         with self.assertRaises(CompactedError):
             store.read("alice", obj.object_id, cap, seq=0)
 
+    def test_compact_reclaims_payloads_and_keeps_metadata_across_restart(self):
+        import json
+
+        from origin.core.capability import Capability
+        from origin.core.objects import CompactedError, ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-reclaim")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("alice", "journal", {"text": "first"}, cap, step=1)
+            store.append("alice", obj.object_id, {"text": "second"}, cap, step=2)
+            store.append("alice", obj.object_id, {"text": "third"}, cap, step=3)
+            store.compact("alice", obj.object_id, cap, keep_recent=1)
+
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIsNone(snapshot[obj.object_id]["versions"][0]["payload"])
+            self.assertIsNone(snapshot[obj.object_id]["versions"][1]["payload"])
+            self.assertEqual(snapshot[obj.object_id]["versions"][2]["payload"], {"text": "third"})
+
+            reopened = ObjectStore(validator, storage_path=path)
+            with self.assertRaises(CompactedError):
+                reopened.read("alice", obj.object_id, cap, seq=0)
+            self.assertEqual(reopened.read("alice", obj.object_id, cap, seq=2).payload, {"text": "third"})
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 

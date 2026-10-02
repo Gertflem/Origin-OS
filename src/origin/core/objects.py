@@ -462,6 +462,20 @@ class ObjectStore:
             reclaimed.append(v.seq)
 
         obj.compacted.update(reclaimed)
+        for seq in reclaimed:
+            idx = next((i for i, v in enumerate(obj.versions) if v.seq == seq), None)
+            if idx is None:
+                continue
+            current = obj.versions[idx]
+            obj.versions[idx] = Version(
+                seq=current.seq,
+                payload=None,
+                author=current.author,
+                step=current.step,
+                note=current.note,
+                acked=current.acked,
+            )
+
         if reclaimed:
             self._do_append(
                 obj,
