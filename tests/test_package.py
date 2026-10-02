@@ -683,6 +683,8 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin — Phase 1", output)
         self.assertIn("/status", output)
         self.assertIn("/log", output)
+        self.assertIn("/watcher", output)
+        self.assertIn("/improver", output)
 
     def test_cli_help(self):
         env = os.environ.copy()
