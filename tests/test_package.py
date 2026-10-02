@@ -208,6 +208,21 @@ class TestPackage(unittest.TestCase):
         self.assertIn("PROPOSED", output)
         self.assertIn("beach", output.lower())
 
+    def test_grant_command_is_exposed_in_main(self):
+        from origin.main import _grant, _handle, boot
+
+        system = boot()
+        self.assertTrue(callable(_grant))
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/grant READ beach photo")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("PROPOSED", output)
+        self.assertIn("grant", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
