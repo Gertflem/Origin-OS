@@ -306,6 +306,23 @@ class TestPackage(unittest.TestCase):
         self.assertIn("origin status", output)
         self.assertIn("units:", output)
 
+    def test_console_status_reports_health_and_focus(self):
+        from origin.main import _to_console, boot
+
+        system = boot()
+        storage = getattr(system.store, "_storage_path", None)
+        if storage is not None:
+            storage.with_suffix(f"{storage.suffix}.tmp").write_text("{}", encoding="utf-8")
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _to_console(system, "/status")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("durable versions", output)
+        self.assertIn("temp snapshot", output)
+        self.assertIn("focus", output)
+
     def test_units_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

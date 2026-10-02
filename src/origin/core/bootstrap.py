@@ -211,6 +211,7 @@ def boot(*, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 
         "services": dict(all_services),
         "token_lifetime": token_lifetime,
         "work_object": FLAKY_LOG,
+        "storage_path": str(store._storage_path) if store._storage_path is not None else None,
     }
     boot["watcher"].arena["params"] = {"services": dict(all_services), "escalate_after": escalate_after}
     boot["improver"].arena["params"] = {"services": dict(all_services), "max_attempts": 2}

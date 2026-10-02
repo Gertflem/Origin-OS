@@ -585,11 +585,17 @@ def _status(ctx: UnitContext) -> None:
         rows = p.get("units", [])
         focus = c.mem.get("focus", {})
         focus_name = focus.get("name") or focus.get("object_id") or focus.get("recipient_name") or "none"
+        storage_path = c.mem.get("params", {}).get("storage_path")
+        temp_snapshot = False
+        if storage_path:
+            temp_snapshot = __import__("pathlib").Path(storage_path).with_suffix(f"{__import__('pathlib').Path(storage_path).suffix}.tmp").exists()
         lines = [
             "Origin status",
             f"  step: {c.step}",
             f"  units: {len(rows)}",
             f"  focus: {focus_name}",
+            f"  storage: {storage_path or 'memory'}",
+            f"  temp snapshot: {'present' if temp_snapshot else 'clean'}",
         ]
 
         store = _services(c).get("object_store")
