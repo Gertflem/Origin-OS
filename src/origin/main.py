@@ -231,6 +231,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/names":
         _names(system)
         return True
+    if parts[0].lower() == "/caps":
+        _caps(system)
+        return True
     if parts[0].lower() == "/help":
         print(BANNER)
         return True
@@ -368,6 +371,23 @@ def _names(system: System) -> None:
             "  "
             f"{binding.get('name', ''):<20} {binding.get('kind', ''):<8} -> {mask(str(binding.get('target', '')))}  "
             f"{binding.get('description', '')}".rstrip()
+        )
+
+
+def _caps(system: System) -> None:
+    rows = list(getattr(system.nucleus, "_caps", {}).values())
+    print("Origin caps")
+    print("  capability registry")
+    print(f"  total: {len(rows)} capabilities")
+    for rec in sorted(rows, key=lambda item: (item.created_step, item.cap_id)):
+        rights = "+".join(sorted(r.value for r in rec.rights)) or "-"
+        holders = ", ".join(mask(str(holder)) for holder in sorted(rec.holders)) or "-"
+        target = mask(str(rec.target)) if rec.target else "(namespace)"
+        lifetime = f"expires {rec.expires_at_step}" if rec.expires_at_step is not None else "permanent"
+        state = "  REVOKED" if rec.revoked else ""
+        print(
+            "  "
+            f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {rec.label}{state}"
         )
 
 

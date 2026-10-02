@@ -140,6 +140,19 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin names", output)
         self.assertIn("binding", output.lower())
 
+    def test_caps_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/caps")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin caps", output)
+        self.assertIn("capability", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
