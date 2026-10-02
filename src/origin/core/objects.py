@@ -212,7 +212,17 @@ class ObjectStore:
         tmp_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(self._snapshot(), handle, sort_keys=True, default=_json_default)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_path, self._storage_path)
+        try:
+            dir_fd = os.open(str(self._storage_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except (AttributeError, OSError, NotImplementedError):
+            pass
 
     def _load(self) -> None:
         if self._storage_path is None or not self._storage_path.exists():

@@ -76,6 +76,25 @@ class TestPackage(unittest.TestCase):
             self.assertEqual(loaded.payload, {"text": "first"})
             self.assertEqual(second.read("alice", obj.object_id, cap).payload, {"text": "second"})
 
+    def test_object_store_persist_flushes_snapshot_before_replace(self):
+        from unittest.mock import patch
+
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-durable-write")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+
+            with patch("origin.core.objects.os.fsync") as fsync, patch("origin.core.objects.os.replace") as replace:
+                store.create("alice", "journal", {"text": "first"}, cap, step=1)
+
+            fsync.assert_called()
+            replace.assert_called_once()
+
     def test_compact_keeps_latest_version_when_keep_recent_is_zero(self):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore
