@@ -36,7 +36,7 @@ from typing import Any, Callable, Optional
 from ..capability import RESERVED_RIGHTS, Capability, Right
 from ..ids import HUMAN, NUCLEUS, mask
 from ..message import Message
-from ..unit import UnitContext, is_answer, unit_type
+from ..unit import UNIT_TYPES, UnitContext, is_answer, unit_type
 from .improver import PROTECTED_KINDS
 
 #: Words that enact a proposal. Kept short and unambiguous on purpose: nothing
@@ -66,6 +66,7 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /focus [name]      show or set what "this" and "it" refer to
     /show <name>       read an Object under a freshly minted READ token
     /history <name>    version metadata for an Object
+    /spawn <kind> <name> [entry]      birth a new Unit under a temporary SPAWN token
     /freeze <name>     contain a Unit
     /kill <name>       retire a Unit and release its arena
     /rollback <name> [seq]   ask the Improver to restore an older code version
@@ -379,6 +380,23 @@ def _command(ctx: UnitContext, text: str) -> None:
             _say(ctx, f"usage: /{cmd} <name>")
         else:
             _resolve(ctx, arg, "object", lambda c, target, name: _propose_read(c, target, name, cmd))
+
+    elif cmd == "spawn":
+        if len(rest) < 2:
+            _say(ctx, "usage: /spawn <kind> <name> [entry]")
+        else:
+            kind = rest[0]
+            name = rest[1]
+            if kind not in UNIT_TYPES:
+                _say(ctx, f"{kind!r} is not a registered Unit kind. Choices: {', '.join(sorted(UNIT_TYPES))}.")
+                return
+            entry = rest[2] if len(rest) > 2 else kind
+            _propose(
+                ctx,
+                f"spawn {kind} {name}",
+                ["SPAWN on the namespace, granted to me, expires in {_lifetime(ctx)} steps"],
+                {"op": "spawn", "kind": kind, "name": name, "entry": entry, "params": {}},
+            )
 
     elif cmd in ("freeze", "kill"):
         if not arg:
@@ -728,6 +746,8 @@ def _execute(ctx: UnitContext, action: dict) -> None:
         _run_intent(ctx, action["plan"], action.get("i", 0), [])
     elif op == "core":
         _run_core(ctx, action)
+    elif op == "spawn":
+        _run_spawn(ctx, action)
     elif op in ("read", "history"):
         _run_read(ctx, action, history=op == "history")
     elif op == "grant":
@@ -751,6 +771,24 @@ def _run_core(ctx: UnitContext, action: dict) -> None:
         )
 
     _mint(ctx, (right,), action["target"], f"console: {action['verb']} {action['name']}", ctx.id, armed)
+
+
+def _run_spawn(ctx: UnitContext, action: dict) -> None:
+    def armed(c: UnitContext, cap: Capability) -> None:
+        c.request(
+            NUCLEUS,
+            "spawn",
+            {
+                "kind": action["kind"],
+                "name": action["name"],
+                "entry": action["entry"],
+                "params": action.get("params", {}),
+            },
+            (cap,),
+            then=lambda c2, reply: _core_result(c2, reply, {**action, "verb": "spawn", "right": "spawn", "target": None, "name": action["name"], "done": "is now running"}),
+        )
+
+    _mint(ctx, (Right.SPAWN,), None, f"console: spawn {action['name']}", ctx.id, armed)
 
 
 def _core_result(ctx: UnitContext, reply: Message, action: dict) -> None:

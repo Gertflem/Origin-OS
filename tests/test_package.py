@@ -311,6 +311,21 @@ class TestPackage(unittest.TestCase):
         self.assertIn("PROPOSED", output)
         self.assertIn("kill", output.lower())
 
+    def test_spawn_command_is_exposed_in_main(self):
+        from origin.main import _handle, _spawn, boot
+
+        system = boot()
+        self.assertTrue(callable(_spawn))
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/spawn photo beach")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("PROPOSED", output)
+        self.assertIn("spawn", output.lower())
+
     def test_rollback_and_work_commands_are_exposed_in_main(self):
         from origin.main import _handle, _rollback, _work, boot
 

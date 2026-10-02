@@ -54,7 +54,7 @@ including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
   Inspect freely:      /status  /objects  /history  /units  /names  /caps  /audit  /powers
-  Borrow authority:    /show <name>   /grant <right> <target> <unit>
+  Borrow authority:    /show <name>   /grant <right> <target> <unit>   /spawn <kind> <name>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
 
@@ -251,6 +251,9 @@ def _handle(system: System, line: str) -> bool:
         return True
     if parts[0].lower() == "/freeze":
         _freeze(system, " ".join(parts[1:]) or None)
+        return True
+    if parts[0].lower() == "/spawn":
+        _spawn(system, " ".join(parts[1:]) or None)
         return True
     if parts[0].lower() == "/kill":
         _kill(system, " ".join(parts[1:]) or None)
@@ -483,6 +486,11 @@ def _freeze(system: System, name: str | None = None) -> None:
 
 def _kill(system: System, name: str | None = None) -> None:
     text = "/kill" if name is None else f"/kill {name}"
+    _to_console(system, text)
+
+
+def _spawn(system: System, spec: str | None = None) -> None:
+    text = "/spawn" if spec is None else f"/spawn {spec}"
     _to_console(system, text)
 
 
