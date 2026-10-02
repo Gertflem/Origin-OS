@@ -420,6 +420,24 @@ class TestPackage(unittest.TestCase):
         self.assertIn("beach", output)
         self.assertIn("now refer", output)
 
+    def test_self_heal_replacement_sets_focus_on_new_unit(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        old_flaky = next(unit for unit in system.nucleus._units.values() if unit.name == "flaky")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/work 3")
+
+        output = buffer.getvalue().lower()
+        console = system.nucleus._units[system.console]
+        focus = console.arena.get("focus", {})
+
+        self.assertIn("flaky", output)
+        self.assertIn("now refer", output)
+        self.assertEqual(focus.get("name"), "flaky")
+        self.assertNotEqual(focus.get("object_id"), old_flaky.unit_id)
+
     def test_rollback_and_work_commands_are_exposed_in_main(self):
         from origin.main import _handle, _rollback, _work, boot
 

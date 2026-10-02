@@ -299,6 +299,14 @@ def _replaced(ctx: UnitContext, p: dict) -> None:
     if not name or not new_id or bind is None:
         _say(ctx, f"! {name or 'a Unit'} was replaced but I could not rebind its name.")
         return
+
+    def on_bound(c: UnitContext, reply: Message) -> None:
+        if reply.verb != "name.bound":
+            _say(c, f"! {name} was replaced but the name bind did not confirm.")
+            return
+        _set_focus(c, new_id, name)
+        _say(c, f"! {name} now refers to {mask(new_id)} — {p.get('reason', '')}".rstrip(" —"))
+
     ctx.request(
         _services(ctx).get("naming", ""),
         "name.bind",
@@ -309,9 +317,7 @@ def _replaced(ctx: UnitContext, p: dict) -> None:
             "description": f"{kind} Unit, code seq {p.get('code_seq')} ({p.get('reason', '')})",
         },
         (bind,),
-        then=lambda c, reply: _say(
-            c, f"! {name} now refers to {mask(new_id)} — {p.get('reason', '')}".rstrip(" —")
-        ),
+        then=on_bound,
     )
 
 
