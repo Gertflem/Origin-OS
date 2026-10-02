@@ -362,6 +362,10 @@ def _status(system: System) -> None:
     caps = getattr(system.nucleus, "_caps", {})
     durable_versions = 0
     compacted_versions = 0
+    storage_path = getattr(system.store, "_storage_path", None)
+    temp_snapshot = False
+    if storage_path is not None:
+        temp_snapshot = storage_path.with_suffix(f"{storage_path.suffix}.tmp").exists()
     for obj in objects.values():
         durable_versions += sum(1 for version in obj.versions if version.acked)
         compacted_versions += len(obj.compacted)
@@ -371,6 +375,8 @@ def _status(system: System) -> None:
     print(f"  objects: {len(objects)}")
     print(f"  durable versions: {durable_versions}")
     print(f"  compacted versions: {compacted_versions}")
+    print(f"  storage: {storage_path or 'memory'}")
+    print(f"  temp snapshot: {'present' if temp_snapshot else 'clean'}")
     print(f"  capabilities: {len(caps)}")
     print(f"  console: {system.console}")
     print(f"  naming: {system.naming}")

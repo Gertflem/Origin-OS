@@ -199,6 +199,24 @@ class TestPackage(unittest.TestCase):
         self.assertIn("durable", output)
         self.assertIn("compacted", output)
 
+    def test_status_reports_temp_snapshot_health(self):
+        from origin.main import _status, boot
+
+        system = boot()
+        store = getattr(system, "store", None)
+        if store is not None and getattr(store, "_storage_path", None) is not None:
+            tmp = store._storage_path.with_suffix(f"{store._storage_path.suffix}.tmp")
+            tmp.write_text("{}", encoding="utf-8")
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _status(system)
+
+        output = buffer.getvalue().lower()
+        self.assertIn("storage", output)
+        self.assertIn("temp", output)
+        self.assertIn("snapshot", output)
+
     def test_status_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
