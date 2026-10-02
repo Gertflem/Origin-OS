@@ -1,24 +1,70 @@
 # Origin
 
-Origin is a capability-based operating system simulation written in Python.
-It is a kernel-style runtime and REPL environment for simulating a minimal OS,
-not a normal end-user application.
+Origin is a capability-based operating system simulation for autonomous AI agents.
+It is not a normal app with an AI feature bolted on. It is a small runtime where
+agents live as first-class system actors: they send Messages, hold Capabilities,
+read and write persistent Objects, and operate under explicit authority rather than
+ambient power.
+
+## Why this project exists
+
+The goal is to create a safe operating environment for agentic software.
+The core principles are simple:
+
+- no ambient authority
+- explicit capability grants
+- message-driven coordination
+- durable, versioned object memory
+- human oversight and auditability
+- recovery and self-healing by design
+
+## Project status
+
+This repository is actively evolving toward a minimal agent OS runtime in Python,
+with a working package layout, CLI entrypoint, and versioned object persistence.
+
+## Quick start
+
+```bash
+py -m pip install -e .
+py -m origin --help
+```
+
+## Run the interactive console
+
+```bash
+py -m origin
+```
+
+## Run the scripted demo
+
+```bash
+py -m origin --demo
+```
+
+## Run a system status check
+
+```bash
+py -m origin --status
+```
 
 ## Project structure
 
 ```text
 Origin/
+├── AGENT_OS_VISION.md
+├── ARCHITECTURE.md
+├── CONSTITUTION.md
 ├── README.md
 ├── pyproject.toml
-├── CONSTITUTION.md
 ├── src/
 │   └── origin/
 │       ├── __init__.py
 │       ├── __main__.py
+│       ├── bootstrap.py
+│       ├── capability.py
 │       ├── cli.py
-│       ├── main.py
-│       ├── capabilities/
-│       │   └── __init__.py
+│       ├── constitution.py
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── bootstrap.py
@@ -33,6 +79,8 @@ Origin/
 │       │   └── __init__.py
 │       ├── kernel/
 │       │   └── __init__.py
+│       ├── main.py
+│       ├── message.py
 │       ├── messages/
 │       │   └── __init__.py
 │       ├── objects/
@@ -49,32 +97,34 @@ Origin/
 │           ├── naming.py
 │           ├── object_store.py
 │           └── watcher.py
-└── tests/
-    └── test_package.py
+├── tests/
+│   └── test_package.py
+└── .github/
+    └── workflows/
+        └── tests.yml
 ```
 
-## Quick start
+## Development philosophy
 
-```bash
-py -m pip install -e .
-py -m origin --help
-```
+Origin follows a constitution-first approach:
 
-## Run the demo
+- the Nucleus stays small and privileged
+- authority exists only as explicit Capabilities
+- objects are append-only and versioned
+- units communicate through Messages
+- humans retain oversight through audit and revocation
 
-```bash
-py -m origin --demo
-```
+That makes it a runtime for safe agent behavior rather than a conventional AI application.
 
-## Run the REPL
+## Roadmap
 
-```bash
-py -m origin
-```
+The project is currently moving through the constitutional phases:
 
-## Notes
+- Phase 1: pure simulation and foundational model
+- Phase 2: durable object substrate and persistence
+- Phase 3: minimal interactive system and richer user-facing workflows
+- later phases: stronger security, naming, and agent lifecycle management
 
-- The package root remains import-friendly for compatibility.
-- The actual implementation still lives primarily under the `origin.core` package.
-- The OS-style facade packages such as `origin.kernel`, `origin.capabilities`, `origin.messages`, and `origin.services` are available as a cleaner architectural boundary.
-- Subpackages such as `origin.units` remain isolated and importable in the usual Python way.
+## License
+
+This project is under active development. It does not yet carry a final public license decision.

@@ -296,6 +296,20 @@ def _repl(system: System) -> None:
     print(f"step {system.nucleus.current_step()}. Every action above is in the audit trail.")
 
 
+def _status(system: System) -> None:
+    units = getattr(system.nucleus, "_units", {})
+    objects = getattr(system.store, "_objects", {})
+    caps = getattr(system.nucleus, "_caps", {})
+    print("Origin status")
+    print(f"  step: {system.nucleus.current_step()}")
+    print(f"  units: {len(units)}")
+    print(f"  objects: {len(objects)}")
+    print(f"  capabilities: {len(caps)}")
+    print(f"  console: {system.console}")
+    print(f"  naming: {system.naming}")
+    print(f"  guardian: {system.guardian}")
+
+
 def main(argv: list[str] | None = None) -> int:
     _reconfigure_stdio()
     parser = argparse.ArgumentParser(
@@ -303,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Origin Phase 1 — a capability-based OS kernel, simulated in pure Python.",
     )
     parser.add_argument("--demo", action="store_true", help="run a scripted tour instead of the interactive REPL")
+    parser.add_argument("--status", action="store_true", help="print a compact runtime summary without entering the interactive REPL")
     parser.add_argument("--fail-every", type=int, default=2,
                         help="the fault-injected Unit raises on every k-th invocation (default 2)")
     parser.add_argument("--escalate-after", type=int, default=1,
@@ -318,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.demo:
         _demo(system)
+    elif args.status:
+        _status(system)
     else:
         _repl(system)
     return 0

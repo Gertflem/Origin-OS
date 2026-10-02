@@ -1,8 +1,10 @@
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +75,18 @@ class TestPackage(unittest.TestCase):
             loaded = second.read("alice", obj.object_id, cap, seq=0)
             self.assertEqual(loaded.payload, {"text": "first"})
             self.assertEqual(second.read("alice", obj.object_id, cap).payload, {"text": "second"})
+
+    def test_status_mode_reports_runtime_summary(self):
+        from origin.main import main
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = main(["--status"])
+
+        self.assertEqual(result, 0)
+        output = buffer.getvalue()
+        self.assertIn("Origin", output)
+        self.assertIn("status", output.lower())
 
     def test_cli_help(self):
         env = os.environ.copy()
