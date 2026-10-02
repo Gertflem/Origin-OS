@@ -179,6 +179,19 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin powers", output)
         self.assertIn("power", output.lower())
 
+    def test_history_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/history")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin history", output)
+        self.assertIn("version", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

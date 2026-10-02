@@ -53,7 +53,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /status  /objects  /units  /names  /caps  /audit  /powers
+  Inspect freely:      /status  /objects  /history  /units  /names  /caps  /audit  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
@@ -237,6 +237,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/audit":
         _audit(system, parts[1:])
         return True
+    if parts[0].lower() == "/history":
+        _history(system)
+        return True
     if parts[0].lower() == "/powers":
         _powers(system)
         return True
@@ -405,6 +408,26 @@ def _audit(system: System, args: list[str] | None = None) -> None:
     for entry in rows:
         detail = {k: v for k, v in entry.items() if k not in ("step", "kind")}
         print(f"  step {entry.get('step', 0):>4}  {entry.get('kind', 'event'):<22} {detail}")
+
+
+def _history(system: System) -> None:
+    rows = system.store.enumerate(HUMAN, system.guardian)
+    print("Origin history")
+    print(f"  total: {len(rows)} objects")
+    if not rows:
+        print("  no object history yet")
+        return
+    for obj in sorted(rows, key=lambda item: item.get("kind", "")):
+        object_id = obj.get("object_id")
+        print(f"  {mask(str(object_id))}  kind={obj.get('kind', '')}  versions={obj.get('versions', 0)}")
+        history = system.store.history(HUMAN, object_id, system.guardian)
+        for version in history:
+            print(
+                "    "
+                f"seq {version.get('seq', 0):>3}  step {version.get('step', 0):>4}  "
+                f"author {mask(str(version.get('author', ''))):<12}  acked {str(version.get('acked', False)).lower()}"
+                f"  note {version.get('note') or '-'}"
+            )
 
 
 def _powers(system: System) -> None:
