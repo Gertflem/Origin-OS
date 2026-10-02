@@ -323,6 +323,25 @@ class TestPackage(unittest.TestCase):
         self.assertIn("temp snapshot", output)
         self.assertIn("focus", output)
 
+    def test_console_log_lists_recent_transparency_events(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        console = system.nucleus._units[system.console]
+        console.arena["log"] = [
+            {"event": "notice", "text": "boot completed", "at_step": 1},
+            {"event": "notice", "text": "status checked", "at_step": 2},
+        ]
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/log 2")
+
+        self.assertTrue(result)
+        output = buffer.getvalue().lower()
+        self.assertIn("boot completed", output)
+        self.assertIn("status checked", output)
+
     def test_units_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

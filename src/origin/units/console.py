@@ -61,6 +61,7 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /caps              every Capability ever minted, redacted
     /audit [n]         the last n core events
     /messages [n]      the last n routed Messages
+    /log [n]           the last n notices and console events
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
     /powers            the Nucleus's own account of its powers
@@ -381,6 +382,9 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd in ("units", "caps", "audit", "messages", "powers"):
         _inspect_core(ctx, cmd, rest)
 
+    elif cmd == "log":
+        _log(ctx, int(rest[0]) if rest and rest[0].isdigit() else 20)
+
     elif cmd in ("watcher", "improver"):
         _inspect_unit(ctx, cmd, rest)
 
@@ -623,6 +627,19 @@ def _status(ctx: UnitContext) -> None:
         c.request(store, "object.enumerate", {}, (cap,), then=objects_done)
 
     ctx.request(NUCLEUS, "inspect", {"what": "units"}, (cap,), then=units_done)
+
+
+def _log(ctx: UnitContext, limit: int) -> None:
+    entries = list(ctx.mem.get("log", []))[-max(1, min(limit, 100)):]
+    if not entries:
+        _say(ctx, "Console log is empty.")
+        return
+    lines = [f"Console log: {len(entries)} recent events"]
+    for entry in entries:
+        step = entry.get("at_step", "-")
+        text = str(entry.get("text", entry.get("event", ""))).strip()
+        lines.append(f"  step {step}  {text}")
+    _say(ctx, "\n".join(lines))
 
 
 def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:
