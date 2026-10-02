@@ -131,6 +131,42 @@ class TestPackage(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertFalse(tmp_path.exists())
 
+    def test_object_store_ignores_corrupt_tmp_snapshot_when_main_file_is_valid(self):
+        import json
+
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-corrupt-tmp")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            tmp_path = path.with_suffix(".json.tmp")
+            valid = {
+                "obj-main": {
+                    "kind": "journal",
+                    "created_step": 1,
+                    "versions": [{
+                        "seq": 0,
+                        "payload": {"text": "valid"},
+                        "author": "alice",
+                        "step": 1,
+                        "note": "main",
+                        "acked": True,
+                    }],
+                    "pins": [],
+                    "compacted": [],
+                    "preferred": None,
+                }
+            }
+            path.write_text(json.dumps(valid), encoding="utf-8")
+            tmp_path.write_text("{not valid json", encoding="utf-8")
+
+            recovered = ObjectStore(validator, storage_path=path)
+            self.assertEqual(recovered.read("alice", "obj-main", cap, seq=0).payload, {"text": "valid"})
+            self.assertFalse(tmp_path.exists())
+
     def test_object_store_prefers_newer_tmp_snapshot_over_stale_main_file(self):
         import json
 

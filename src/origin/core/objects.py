@@ -227,14 +227,29 @@ class ObjectStore:
     def _load(self) -> None:
         if self._storage_path is None:
             return
+
+        def _load_json(path: Path) -> Optional[dict]:
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+            except (OSError, ValueError, TypeError):
+                return None
+
         candidate = self._storage_path
         tmp = candidate.with_suffix(f"{candidate.suffix}.tmp")
         promoted = False
 
         if tmp.exists():
-            if not candidate.exists() or tmp.stat().st_mtime_ns >= candidate.stat().st_mtime_ns:
-                os.replace(tmp, candidate)
-                promoted = True
+            tmp_payload = _load_json(tmp)
+            if tmp_payload is not None:
+                if not candidate.exists() or tmp.stat().st_mtime_ns >= candidate.stat().st_mtime_ns:
+                    os.replace(tmp, candidate)
+                    promoted = True
+                else:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             else:
                 try:
                     tmp.unlink(missing_ok=True)
@@ -243,8 +258,12 @@ class ObjectStore:
 
         if not candidate.exists():
             return
-        with open(candidate, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+
+        payload = _load_json(candidate)
+        if payload is None:
+            self._objects = {}
+            return
+
         if promoted:
             try:
                 tmp.unlink(missing_ok=True)
