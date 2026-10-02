@@ -301,6 +301,20 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(len(plan["steps"]), 2)
         self.assertEqual(plan["steps"][1]["recipient"], "contact-david")
 
+    def test_parse_focus_allows_different_deictic_forms(self):
+        from origin.units.naming import _parse
+
+        def resolve_phrase(phrase, kind):
+            if kind == "object" and phrase in {"beach photo", "it"}:
+                return "obj-beach", 1.0, []
+            if kind == "contact" and phrase == "david":
+                return "contact-david", 1.0, []
+            return None, 0.0, []
+
+        plan = _parse("show the same photo", {"object_id": "obj-beach"}, resolve_phrase)
+        self.assertTrue(plan["resolved"])
+        self.assertEqual(plan["steps"][0]["target"], "obj-beach")
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 

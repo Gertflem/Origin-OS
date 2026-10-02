@@ -132,7 +132,15 @@ CLAUSE_SPLIT = re.compile(r"\b(?:and then|and|then|,|;)\b")
 #: Deictic references — resolved against the Console's current focus rather than
 #: against the namespace, because "this photo" means the one we were just
 #: talking about, not one named "this".
-DEICTIC = frozenset({"this", "that", "it", "these", "those", "the same"})
+DEICTIC = frozenset({"this", "that", "it", "these", "those", "same", "the same"})
+
+
+def is_deictic_reference(phrase: str) -> bool:
+    """Recognise focus-based references like "the same photo" or "that picture"."""
+    cleaned = [w for w in tokens(phrase) if w not in {"the", "a", "an", "my", "our"}]
+    if not cleaned:
+        return True
+    return cleaned[0] in DEICTIC or "same" in cleaned or " ".join(cleaned[:2]) in DEICTIC
 
 WORDS = re.compile(r"[a-z0-9']+")
 
@@ -430,7 +438,7 @@ def _parse(text: str, focus: dict | None, resolve_phrase) -> dict:
         # namespace. "make this photo brighter" only means something in context,
         # and an empty target phrase means "the thing we were just discussing".
         tw = tokens(target_phrase)
-        if focus.get("object_id") and (not tw or tw[0] in DEICTIC):
+        if focus.get("object_id") and (not tw or is_deictic_reference(target_phrase)):
             step.target = focus["object_id"]
             step.target_score = 1.0
             step.target_phrase = target_phrase or "this"
