@@ -228,14 +228,21 @@ class ObjectStore:
         if self._storage_path is None:
             return
         candidate = self._storage_path
-        if not candidate.exists():
-            tmp = candidate.with_suffix(f"{candidate.suffix}.tmp")
-            if tmp.exists():
-                candidate = tmp
+        tmp = candidate.with_suffix(f"{candidate.suffix}.tmp")
+        promoted = False
+        if not candidate.exists() and tmp.exists():
+            os.replace(tmp, candidate)
+            promoted = True
+            candidate = self._storage_path
         if not candidate.exists():
             return
         with open(candidate, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        if promoted:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         self._objects = {}
         for object_id, item in payload.items():
             obj = Object(

@@ -128,6 +128,8 @@ class TestPackage(unittest.TestCase):
 
             recovered = ObjectStore(validator, storage_path=path)
             self.assertEqual(recovered.read("alice", "obj-123", cap, seq=0).payload, {"text": "first"})
+            self.assertTrue(path.exists())
+            self.assertFalse(tmp_path.exists())
 
     def test_compact_keeps_latest_version_when_keep_recent_is_zero(self):
         from origin.core.capability import Capability
