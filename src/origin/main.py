@@ -234,6 +234,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/caps":
         _caps(system)
         return True
+    if parts[0].lower() == "/audit":
+        _audit(system, parts[1:])
+        return True
     if parts[0].lower() == "/help":
         print(BANNER)
         return True
@@ -389,6 +392,16 @@ def _caps(system: System) -> None:
             "  "
             f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {rec.label}{state}"
         )
+
+
+def _audit(system: System, args: list[str] | None = None) -> None:
+    limit = int((args or ["20"])[0]) if (args and (args[0].isdigit() or args[0].startswith("-"))) else 20
+    rows = system.nucleus.audit(system.guardian, HUMAN, limit=max(0, limit))
+    print("Origin audit")
+    print(f"  last {len(rows)} core events")
+    for entry in rows:
+        detail = {k: v for k, v in entry.items() if k not in ("step", "kind")}
+        print(f"  step {entry.get('step', 0):>4}  {entry.get('kind', 'event'):<22} {detail}")
 
 
 def main(argv: list[str] | None = None) -> int:

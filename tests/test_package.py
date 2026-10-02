@@ -153,6 +153,19 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin caps", output)
         self.assertIn("capability", output.lower())
 
+    def test_audit_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/audit")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin audit", output)
+        self.assertIn("event", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
