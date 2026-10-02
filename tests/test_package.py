@@ -101,6 +101,45 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin status", output)
         self.assertIn("units:", output)
 
+    def test_units_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/units")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin units", output)
+        self.assertIn("unit", output.lower())
+
+    def test_objects_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/objects")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin objects", output)
+        self.assertIn("object", output.lower())
+
+    def test_names_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/names")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin names", output)
+        self.assertIn("binding", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

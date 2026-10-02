@@ -222,6 +222,15 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/status":
         _status(system)
         return True
+    if parts[0].lower() == "/units":
+        _units(system)
+        return True
+    if parts[0].lower() == "/objects":
+        _objects(system)
+        return True
+    if parts[0].lower() == "/names":
+        _names(system)
+        return True
     if parts[0].lower() == "/help":
         print(BANNER)
         return True
@@ -314,6 +323,52 @@ def _status(system: System) -> None:
     print(f"  console: {system.console}")
     print(f"  naming: {system.naming}")
     print(f"  guardian: {system.guardian}")
+
+
+def _units(system: System) -> None:
+    rows = [unit.describe() for unit in sorted(getattr(system.nucleus, "_units", {}).values(), key=lambda u: (u.born_step, u.name))]
+    print("Origin units")
+    print(f"  total: {len(rows)}")
+    for unit in rows:
+        print(
+            "  "
+            f"{unit.get('name', ''):<12} {unit.get('kind', ''):<12} {unit.get('state', ''):<8} "
+            f"born {unit.get('born_step', 0):>3}  crashes {unit.get('crashes', 0)}  "
+            f"preempted {unit.get('preemptions', 0)}  caps {unit.get('caps_held', 0)}  "
+            f"inbox {unit.get('inbox_depth', 0)}  {mask(str(unit.get('unit_id', '')))}"
+        )
+
+
+def _objects(system: System) -> None:
+    rows = system.store.enumerate(HUMAN, system.guardian)
+    print("Origin objects")
+    print(f"  total: {len(rows)}")
+    for obj in sorted(rows, key=lambda item: (item.get("kind", ""), item.get("object_id", ""))):
+        print(
+            "  "
+            f"{mask(str(obj.get('object_id', ''))):<20} {obj.get('kind', ''):<10} "
+            f"versions {obj.get('versions', 0):>3}  latest {obj.get('latest_seq', 0):>3}  "
+            f"preferred {obj.get('preferred')}  pins {obj.get('pins', [])}"
+        )
+
+
+def _names(system: System) -> None:
+    naming = getattr(system.nucleus, "_units", {}).get(system.naming)
+    bindings = getattr(naming, "mem", {}).get("bindings", {}) if naming is not None else {}
+    rows = []
+    for entry in bindings.values():
+        if hasattr(entry, "describe"):
+            rows.append(entry.describe())
+        elif isinstance(entry, dict):
+            rows.append(entry)
+    print("Origin names")
+    print(f"  total: {len(rows)} bindings")
+    for binding in sorted(rows, key=lambda item: str(item.get("name", "")).lower()):
+        print(
+            "  "
+            f"{binding.get('name', ''):<20} {binding.get('kind', ''):<8} -> {mask(str(binding.get('target', '')))}  "
+            f"{binding.get('description', '')}".rstrip()
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
