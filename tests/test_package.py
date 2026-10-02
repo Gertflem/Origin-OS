@@ -219,6 +219,28 @@ class TestPackage(unittest.TestCase):
         self.assertIn("temp", output)
         self.assertIn("snapshot", output)
 
+    def test_object_store_reports_retention_summary(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-retention")
+        store = ObjectStore(validator)
+
+        obj = store.create("alice", "journal", {"text": "first"}, cap, step=1)
+        store.append("alice", obj.object_id, {"text": "second"}, cap, step=2)
+        store.append("alice", obj.object_id, {"text": "third"}, cap, step=3)
+        store.pin("alice", obj.object_id, 2, cap)
+        store.prefer("alice", obj.object_id, 0, cap)
+        store.compact("alice", obj.object_id, cap, keep_recent=1)
+
+        summary = store.retention_summary("alice", obj.object_id, cap)
+        self.assertEqual(summary["total_versions"], 4)
+        self.assertEqual(summary["durable"], 4)
+        self.assertEqual(summary["pinned"], 1)
+        self.assertEqual(summary["compacted"], 2)
+        self.assertEqual(summary["preferred"], 0)
+
     def test_status_command_is_available_in_console(self):
         from origin.main import _handle, boot
 

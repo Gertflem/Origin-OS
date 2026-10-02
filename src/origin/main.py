@@ -366,15 +366,18 @@ def _status(system: System) -> None:
     temp_snapshot = False
     if storage_path is not None:
         temp_snapshot = storage_path.with_suffix(f"{storage_path.suffix}.tmp").exists()
+    pinned_versions = 0
     for obj in objects.values():
         durable_versions += sum(1 for version in obj.versions if version.acked)
         compacted_versions += len(obj.compacted)
+        pinned_versions += len(obj.pins)
     print("Origin status")
     print(f"  step: {system.nucleus.current_step()}")
     print(f"  units: {len(units)}")
     print(f"  objects: {len(objects)}")
     print(f"  durable versions: {durable_versions}")
     print(f"  compacted versions: {compacted_versions}")
+    print(f"  pinned versions: {pinned_versions}")
     print(f"  storage: {storage_path or 'memory'}")
     print(f"  temp snapshot: {'present' if temp_snapshot else 'clean'}")
     print(f"  capabilities: {len(caps)}")

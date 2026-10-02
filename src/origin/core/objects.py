@@ -393,6 +393,21 @@ class ObjectStore:
         self._check(cap, Right.READ, object_id, holder)
         return [v for v in obj.versions if v.acked]
 
+    def retention_summary(self, holder: str, object_id: str, cap: Optional[Capability]) -> dict:
+        """Summarize the retention state of one Object for audit and Console views."""
+        obj = self._object(object_id)
+        self._check(cap, Right.AUDIT, object_id, holder)
+        return {
+            "object_id": obj.object_id,
+            "kind": obj.kind,
+            "total_versions": len(obj.versions),
+            "durable": sum(1 for v in obj.versions if v.acked),
+            "pinned": len(obj.pins),
+            "compacted": len(obj.compacted),
+            "preferred": obj.preferred,
+            "latest": obj.latest_seq,
+        }
+
     def history(self, holder: str, object_id: str, cap: Optional[Capability]) -> list[dict]:
         """Full metadata for every version, payloads omitted.
 
