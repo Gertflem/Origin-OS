@@ -140,8 +140,17 @@ WORDS = re.compile(r"[a-z0-9']+")
 MODIFIER = re.compile(r"\b(?:by|to|at)\s+(-?\d+(?:\.\d+)?)\s*(%|percent)?\s*$")
 
 
+def normalize_phrase(text: str) -> str:
+    """Lowercase and strip punctuation so natural language matches names reliably."""
+    value = text.strip().lower()
+    value = value.replace("-", " ")
+    value = re.sub(r"[.,!?;:]+$", "", value)
+    value = re.sub(r"[^a-z0-9\s']+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def tokens(text: str) -> list[str]:
-    return WORDS.findall(text.lower())
+    return WORDS.findall(normalize_phrase(text))
 
 
 def extract_modifier(clause: str) -> tuple[float | None, str]:
@@ -170,11 +179,12 @@ def score(binding: Binding, phrase: str) -> float:
     an exact match, which is what keeps the Console from confidently acting on a
     guess — it must fall through to ranked suggestions instead.
     """
-    p = phrase.strip().lower()
-    name = binding.name.lower()
+    p = normalize_phrase(phrase)
+    name = normalize_phrase(binding.name)
+    aliases = {normalize_phrase(a) for a in binding.aliases}
     if p == name:
         return 1.0
-    if p in {a.lower() for a in binding.aliases}:
+    if p in aliases:
         return 0.95
 
     # Strip articles so "the beach photo" finds a binding named "beach photo".
@@ -184,7 +194,7 @@ def score(binding: Binding, phrase: str) -> float:
     if name.startswith(stripped) or stripped.startswith(name):
         return 0.80
 
-    haystack = " ".join([binding.name, binding.description, *binding.aliases]).lower()
+    haystack = normalize_phrase(" ".join([binding.name, binding.description, *binding.aliases]))
     if stripped and stripped in haystack:
         return 0.70
 

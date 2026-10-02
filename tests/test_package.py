@@ -268,6 +268,20 @@ class TestPackage(unittest.TestCase):
                 reopened.read("alice", obj.object_id, cap, seq=0)
             self.assertEqual(reopened.read("alice", obj.object_id, cap, seq=2).payload, {"text": "third"})
 
+    def test_name_score_handles_punctuation_and_articles(self):
+        from origin.units.naming import Binding, score
+
+        binding = Binding(
+            name="beach photo",
+            target="obj-beach",
+            kind="object",
+            description="a coastal photograph",
+            aliases=("beach pic",),
+        )
+
+        self.assertGreaterEqual(score(binding, "the beach photo."), 0.9)
+        self.assertGreaterEqual(score(binding, "beach pic!"), 0.9)
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 
