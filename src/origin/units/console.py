@@ -339,6 +339,8 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
         started = payload.get("started_at")
         heartbeat = payload.get("last_heartbeat")
         stopped = payload.get("stopped_at")
+        tools = payload.get("tools") or []
+        scope = payload.get("memory_scope")
         parts = [f"{name}: state={state}"]
         if started is not None:
             parts.append(f"started={started}")
@@ -346,7 +348,21 @@ def _agent_result(ctx: UnitContext, reply: Message, name: str, action: str) -> N
             parts.append(f"heartbeat={heartbeat}")
         if stopped is not None:
             parts.append(f"stopped={stopped}")
+        if tools:
+            parts.append(f"tools={','.join(tools)}")
+        if scope is not None:
+            parts.append(f"scope={scope}")
         _say(ctx, ", ".join(parts))
+        return
+    tools = payload.get("tools") or []
+    scope = payload.get("memory_scope")
+    if tools or scope is not None:
+        detail = ""
+        if tools:
+            detail += f" tools={','.join(tools)}"
+        if scope is not None:
+            detail += f" scope={scope}"
+        _say(ctx, f"{name} is {state}.{detail}")
         return
     _say(ctx, f"{name} is {state}.")
 

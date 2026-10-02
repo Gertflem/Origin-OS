@@ -382,6 +382,23 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(report["agents"][0]["started_at"], 12)
         self.assertEqual(report["agents"][0]["last_heartbeat"], 15)
 
+    def test_agent_registry_reports_tools_and_scope(self):
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+
+        system = boot()
+        agent = system.nucleus.birth("agent", "tool-agent", "agent")
+        agent.arena["state"] = "running"
+        agent.arena["started_at"] = 12
+        agent.arena["last_heartbeat"] = 15
+        agent.arena["tools"] = ["read", "write"]
+        agent.arena["memory_scope"] = {"objects": ["obj-beach"], "max_bytes": 128}
+
+        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        target = next(item for item in report["agents"] if item["name"] == "tool-agent")
+        self.assertEqual(target["tools"], ["read", "write"])
+        self.assertEqual(target["memory_scope"]["max_bytes"], 128)
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 

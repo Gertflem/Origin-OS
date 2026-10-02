@@ -623,6 +623,8 @@ class Nucleus:
                     "started_at": unit.arena.get("started_at"),
                     "last_heartbeat": unit.arena.get("last_heartbeat"),
                     "stopped_at": unit.arena.get("stopped_at"),
+                    "tools": unit.arena.get("tools", []),
+                    "memory_scope": unit.arena.get("memory_scope"),
                     "born_step": unit.born_step,
                     "messages_handled": unit.messages_handled,
                     "caps_held": len(unit.caps),

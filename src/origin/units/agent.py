@@ -17,18 +17,40 @@ def agent_handler(ctx, msg):
     verb = msg.verb
 
     if verb == "agent.start":
+        payload = msg.payload or {}
         ctx.mem["state"] = "running"
         ctx.mem["started_at"] = ctx.step
         ctx.mem["last_heartbeat"] = ctx.step
+        ctx.mem["tools"] = list(payload.get("tools") or ctx.mem.get("tools", []))
+        if payload.get("memory_scope") is not None:
+            ctx.mem["memory_scope"] = payload["memory_scope"]
         if msg.reply_to is not None:
-            ctx.respond(msg, "agent.started", {"state": "running", "started_at": ctx.mem["started_at"]})
+            ctx.respond(
+                msg,
+                "agent.started",
+                {
+                    "state": "running",
+                    "started_at": ctx.mem["started_at"],
+                    "tools": ctx.mem.get("tools", []),
+                    "memory_scope": ctx.mem.get("memory_scope"),
+                },
+            )
         return
 
     if verb == "agent.heartbeat":
         ctx.mem["state"] = "running"
         ctx.mem["last_heartbeat"] = ctx.step
         if msg.reply_to is not None:
-            ctx.respond(msg, "agent.heartbeat", {"state": "running", "last_heartbeat": ctx.mem["last_heartbeat"]})
+            ctx.respond(
+                msg,
+                "agent.heartbeat",
+                {
+                    "state": "running",
+                    "last_heartbeat": ctx.mem["last_heartbeat"],
+                    "tools": ctx.mem.get("tools", []),
+                    "memory_scope": ctx.mem.get("memory_scope"),
+                },
+            )
         return
 
     if verb == "agent.stop":
@@ -44,6 +66,8 @@ def agent_handler(ctx, msg):
             "started_at": ctx.mem.get("started_at"),
             "last_heartbeat": ctx.mem.get("last_heartbeat"),
             "stopped_at": ctx.mem.get("stopped_at"),
+            "tools": ctx.mem.get("tools", []),
+            "memory_scope": ctx.mem.get("memory_scope"),
         }
         if msg.reply_to is not None:
             ctx.respond(msg, "agent.status", payload)
