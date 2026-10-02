@@ -240,6 +240,12 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/history":
         _history(system)
         return True
+    if parts[0].lower() == "/focus":
+        _focus(system, " ".join(parts[1:]) or None)
+        return True
+    if parts[0].lower() == "/show":
+        _show(system, " ".join(parts[1:]) or None)
+        return True
     if parts[0].lower() == "/powers":
         _powers(system)
         return True
@@ -428,6 +434,16 @@ def _history(system: System) -> None:
                 f"author {mask(str(version.get('author', ''))):<12}  acked {str(version.get('acked', False)).lower()}"
                 f"  note {version.get('note') or '-'}"
             )
+
+
+def _focus(system: System, name: str | None = None) -> None:
+    text = "/focus" if name is None else f"/focus {name}"
+    _to_console(system, text)
+
+
+def _show(system: System, name: str | None = None) -> None:
+    text = "/show" if name is None else f"/show {name}"
+    _to_console(system, text)
 
 
 def _powers(system: System) -> None:
