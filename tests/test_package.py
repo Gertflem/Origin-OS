@@ -326,6 +326,19 @@ class TestPackage(unittest.TestCase):
         self.assertIn("PROPOSED", output)
         self.assertIn("spawn", output.lower())
 
+    def test_spawn_confirm_sets_focus_on_new_unit(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/spawn photo beach")
+            _handle(system, "confirm")
+
+        output = buffer.getvalue().lower()
+        self.assertIn("beach", output)
+        self.assertIn("now refer", output)
+
     def test_rollback_and_work_commands_are_exposed_in_main(self):
         from origin.main import _handle, _rollback, _work, boot
 
