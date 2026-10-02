@@ -682,6 +682,7 @@ class TestPackage(unittest.TestCase):
         output = buffer.getvalue()
         self.assertIn("Origin — Phase 1", output)
         self.assertIn("/status", output)
+        self.assertIn("/log", output)
 
     def test_cli_help(self):
         env = os.environ.copy()
