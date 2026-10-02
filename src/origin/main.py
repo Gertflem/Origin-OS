@@ -219,6 +219,9 @@ def _handle(system: System, line: str) -> bool:
     if text.lower() in ("/quit", "/exit", "/q", "quit", "exit"):
         return False
     parts = text.split()
+    if parts[0].lower() == "/status":
+        _status(system)
+        return True
     if parts[0].lower() == "/revoke":
         _revoke(system, parts[1:])
         return True

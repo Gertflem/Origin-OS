@@ -88,6 +88,19 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin", output)
         self.assertIn("status", output.lower())
 
+    def test_status_command_is_available_in_console(self):
+        from origin.main import _handle, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/status")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("Origin status", output)
+        self.assertIn("units:", output)
+
     def test_cli_help(self):
         env = os.environ.copy()
         existing = env.get("PYTHONPATH")
