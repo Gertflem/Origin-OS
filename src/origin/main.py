@@ -255,6 +255,15 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/kill":
         _kill(system, " ".join(parts[1:]) or None)
         return True
+    if parts[0].lower() == "/rollback":
+        if len(parts) > 1:
+            _rollback(system, parts[1], parts[2] if len(parts) > 2 else None)
+        else:
+            _rollback(system)
+        return True
+    if parts[0].lower() == "/work":
+        _work(system, parts[1] if len(parts) > 1 else None)
+        return True
     if parts[0].lower() == "/powers":
         _powers(system)
         return True
@@ -468,6 +477,18 @@ def _freeze(system: System, name: str | None = None) -> None:
 def _kill(system: System, name: str | None = None) -> None:
     text = "/kill" if name is None else f"/kill {name}"
     _to_console(system, text)
+
+
+def _rollback(system: System, name: str | None = None, seq: str | None = None) -> None:
+    parts = ["/rollback", name] if name else ["/rollback"]
+    if seq is not None:
+        parts.append(seq)
+    _to_console(system, " ".join(parts))
+
+
+def _work(system: System, count: int | str | None = None) -> None:
+    arg = "" if count is None else str(count)
+    _to_console(system, "/work " + arg if arg else "/work")
 
 
 def _powers(system: System) -> None:

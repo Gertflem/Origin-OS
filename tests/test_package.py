@@ -253,6 +253,27 @@ class TestPackage(unittest.TestCase):
         self.assertIn("PROPOSED", output)
         self.assertIn("kill", output.lower())
 
+    def test_rollback_and_work_commands_are_exposed_in_main(self):
+        from origin.main import _handle, _rollback, _work, boot
+
+        system = boot()
+        self.assertTrue(callable(_rollback))
+        self.assertTrue(callable(_work))
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/rollback")
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("usage: /rollback", output.lower())
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/work 1")
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("work:", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
