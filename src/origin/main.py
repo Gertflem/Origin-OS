@@ -252,6 +252,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/freeze":
         _freeze(system, " ".join(parts[1:]) or None)
         return True
+    if parts[0].lower() == "/kill":
+        _kill(system, " ".join(parts[1:]) or None)
+        return True
     if parts[0].lower() == "/powers":
         _powers(system)
         return True
@@ -459,6 +462,11 @@ def _grant(system: System, args: list[str] | None = None) -> None:
 
 def _freeze(system: System, name: str | None = None) -> None:
     text = "/freeze" if name is None else f"/freeze {name}"
+    _to_console(system, text)
+
+
+def _kill(system: System, name: str | None = None) -> None:
+    text = "/kill" if name is None else f"/kill {name}"
     _to_console(system, text)
 
 

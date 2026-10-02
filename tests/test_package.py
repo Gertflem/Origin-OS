@@ -238,6 +238,21 @@ class TestPackage(unittest.TestCase):
         self.assertIn("PROPOSED", output)
         self.assertIn("freeze", output.lower())
 
+    def test_kill_command_is_exposed_in_main(self):
+        from origin.main import _handle, _kill, boot
+
+        system = boot()
+        self.assertTrue(callable(_kill))
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            result = _handle(system, "/kill flaky")
+
+        self.assertTrue(result)
+        output = buffer.getvalue()
+        self.assertIn("PROPOSED", output)
+        self.assertIn("kill", output.lower())
+
     def test_help_command_is_available_in_console(self):
         from origin.main import _handle, boot
 
