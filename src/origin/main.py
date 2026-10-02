@@ -237,6 +237,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/audit":
         _audit(system, parts[1:])
         return True
+    if parts[0].lower() == "/powers":
+        _powers(system)
+        return True
     if parts[0].lower() == "/help":
         print(BANNER)
         return True
@@ -402,6 +405,17 @@ def _audit(system: System, args: list[str] | None = None) -> None:
     for entry in rows:
         detail = {k: v for k, v in entry.items() if k not in ("step", "kind")}
         print(f"  step {entry.get('step', 0):>4}  {entry.get('kind', 'event'):<22} {detail}")
+
+
+def _powers(system: System) -> None:
+    report = system.nucleus.audit_powers()
+    print("Origin powers")
+    print("  Nucleus account of its constitutional powers")
+    for name in report.get("public_methods", []):
+        print(f"  {name}")
+    print(f"  public methods not mapped to a constitutional power: {report.get('unmapped') or 'none'}")
+    print(f"  powers claimed outside the Constitution: {report.get('powers_outside_constitution') or 'none'}")
+    print(f"  still tiny: {report.get('tiny')}")
 
 
 def main(argv: list[str] | None = None) -> int:
