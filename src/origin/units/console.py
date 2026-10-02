@@ -60,6 +60,7 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /units             every Unit, its state and its crash count
     /caps              every Capability ever minted, redacted
     /audit [n]         the last n core events
+    /messages [n]      the last n routed Messages
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
     /powers            the Nucleus's own account of its powers
@@ -374,7 +375,7 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd == "objects":
         _list_objects(ctx)
 
-    elif cmd in ("units", "caps", "audit", "powers"):
+    elif cmd in ("units", "caps", "audit", "messages", "powers"):
         _inspect_core(ctx, cmd, rest)
 
     elif cmd in ("watcher", "improver"):
@@ -604,6 +605,20 @@ def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:
         for e in rows:
             detail = {k: v for k, v in e.items() if k not in ("step", "kind")}
             lines.append(f"  step {e.get('step',0):>4}  {e.get('kind',''):<22} {_render(detail)}")
+        _say(ctx, "\n".join(lines))
+        return
+
+    if what == "messages":
+        rows = p.get("messages", [])
+        lines = [f"Origin messages: {len(rows)} routed messages"]
+        for e in rows:
+            sender = e.get("sender", "")
+            recipient = e.get("recipient", "")
+            verb = e.get("verb", "")
+            caps = len(e.get("caps", []) or [])
+            lines.append(
+                f"  step {e.get('step',0):>4}  sender={sender} recipient={recipient} verb={verb} caps={caps}"
+            )
         _say(ctx, "\n".join(lines))
         return
 

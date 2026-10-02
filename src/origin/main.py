@@ -237,6 +237,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/audit":
         _audit(system, parts[1:])
         return True
+    if parts[0].lower() == "/messages":
+        _messages(system, parts[1:])
+        return True
     if parts[0].lower() in ("/watcher", "/improver"):
         _to_console(system, " ".join(parts))
         return True
@@ -494,6 +497,18 @@ def _audit(system: System, args: list[str] | None = None) -> None:
     for entry in rows:
         detail = {k: v for k, v in entry.items() if k not in ("step", "kind")}
         print(f"  step {entry.get('step', 0):>4}  {entry.get('kind', 'event'):<22} {detail}")
+
+
+def _messages(system: System, args: list[str] | None = None) -> None:
+    limit = int((args or ["20"])[0]) if (args and (args[0].isdigit() or args[0].startswith("-"))) else 20
+    rows = system.nucleus._inspect(HUMAN, system.guardian, {"what": "messages", "limit": max(0, limit)}).get("messages", [])
+    print("Origin messages")
+    print(f"  last {len(rows)} routed messages")
+    for entry in rows:
+        print(
+            f"  step {entry.get('step', 0):>4}  sender={entry.get('sender', '')} recipient={entry.get('recipient', '')} "
+            f"verb={entry.get('verb', '')} caps={len(entry.get('caps', []) or [])}"
+        )
 
 
 def _history(system: System) -> None:

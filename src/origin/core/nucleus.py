@@ -625,6 +625,10 @@ class Nucleus:
             entries = [e for e in self._audit if kinds is None or e.kind in kinds]
             limit = int(p.get("limit", 40))
             return {"audit": [{"step": e.step, "kind": e.kind, **e.detail} for e in entries[-limit:]]}
+        if what == "messages":
+            entries = [e for e in self._audit if e.kind == "route"]
+            limit = int(p.get("limit", 40))
+            return {"messages": [{"step": e.step, "kind": e.kind, **e.detail} for e in entries[-limit:]]}
         if what == "powers":
             return self.audit_powers()
         raise CapabilityError(f"unknown inspection target {what!r}")
