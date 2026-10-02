@@ -98,3 +98,61 @@ The long-term direction is to turn the project into a layered OS runtime that su
 - self-improving agents constrained by policy
 
 This is the future home for AI agents: a runtime where they can act, learn, fail, adapt, and remain accountable.
+
+## Current engineering posture
+
+Origin is already beyond a toy prototype. The repository now contains:
+
+- a constitution-first Python package layout
+- capability-gated kernel and message routing
+- durable object history with compaction and retention metadata
+- a human console with status, audit, watcher, and improver views
+- a green regression suite proving the runtime is stable enough to extend
+
+The system is not "complete" as a real operating system yet, but it is stable enough to move deliberately toward higher-level agent infrastructure without breaking the safety model.
+
+## Agent operating rules
+
+Any future work on Origin should obey these rules:
+
+1. Keep all code inside the package layout. No loose modules in a root directory.
+2. Preserve the constitution as the source of truth. If it conflicts with a convenient shortcut, the shortcut loses.
+3. Add a failing regression before a fix whenever behavior changes.
+4. Keep human visibility first-class. Every agent action must be inspectable.
+5. Prefer message-driven execution over ambient authority.
+6. Commit checkpoints after stable milestones, not after speculative work.
+
+This is a project for safe autonomy, not for unchecked automation.
+
+## Next 30-day roadmap
+
+### Phase A — harden the runtime substrate (0-10 days)
+
+- tighten persistence and crash recovery edge cases
+- add explicit durability audits and rejection paths
+- improve object retention policies and operator reporting
+- leave the system observable under stress
+
+### Phase B — make agent workflow natural (10-20 days)
+
+- add richer naming and intent handling for real tasks
+- support safe delegation patterns for agent tools and resources
+- improve the human approval flow for complex actions
+- make the console read like a true operator surface, not a debug shell
+
+### Phase C — first real agent lifecycle (20-30 days)
+
+- define a standard agent Unit template with startup, heartbeat, and shutdown
+- add recovery/replacement flows for failed agent workers
+- model explicit tool access and bounded memory scopes
+- expose a simple agent registry and runtime status for live monitoring
+
+## Success criteria for the next milestone
+
+A strong near-term target is:
+
+- a human can start the system, inspect runtime state, spawn an agent, grant a bounded capability, and watch the agent act under policy
+- object memory survives restart boundaries with a clear audit trail
+- failed agents are contained and can be replaced without global disruption
+
+That is the next credible step from the current state: safe agent execution inside a durable, inspectable platform.
