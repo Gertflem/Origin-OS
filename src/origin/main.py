@@ -431,16 +431,23 @@ def _caps(system: System, args: list[str] | None = None) -> None:
         rights = "+".join(sorted(r.value for r in rec.rights)) or "-"
         holders = ", ".join(mask(str(holder)) for holder in sorted(rec.holders)) or "-"
         target = mask(str(rec.target)) if rec.target else "(namespace)"
+        grantor = mask(str(rec.grantor))
         lifetime = f"expires {rec.expires_at_step}" if rec.expires_at_step is not None else "permanent"
         if rec.revoked:
             state = "revoked"
+            revoker = f" by {mask(str(rec.revoked_by))}"
+            reason = f" reason={rec.revoked_reason or 'n/a'}"
         elif rec.live_at(system.nucleus.current_step()):
             state = "live"
+            revoker = ""
+            reason = ""
         else:
             state = "expired"
+            revoker = ""
+            reason = ""
         print(
             "  "
-            f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {state:<8} {rec.label}"
+            f"{mask(str(rec.cap_id)):<20} {rights:<20} target {target:<18} to {holders:<18} {lifetime:<12} {state:<8} grantor {grantor:<12}{revoker}{reason}  {rec.label}"
         )
 
 

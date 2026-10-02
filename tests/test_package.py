@@ -229,6 +229,8 @@ class TestPackage(unittest.TestCase):
         output = buffer.getvalue().lower()
         self.assertIn("revoked", output)
         self.assertIn("beach read", output.lower())
+        self.assertIn("grantor", output)
+        self.assertIn("reason=security review", output)
 
     def test_audit_command_is_available_in_console(self):
         from origin.main import _handle, boot
