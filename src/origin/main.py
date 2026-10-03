@@ -614,12 +614,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="containments the Watcher waits before asking the Improver to act (default 1)")
     parser.add_argument("--token-lifetime", type=int, default=24,
                         help="steps an intent-time Capability lives before it expires (default 24)")
+    parser.add_argument("--storage", metavar="PATH", default=None,
+                        help="persist Objects to this file; state survives restarts (default: in-memory)")
     args = parser.parse_args(argv)
 
     system = boot(
         fail_every=args.fail_every,
         escalate_after=args.escalate_after,
         token_lifetime=args.token_lifetime,
+        storage_path=args.storage,
     )
     if args.demo:
         _demo(system)

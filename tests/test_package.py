@@ -58,6 +58,25 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_boot_with_storage_path_survives_restart(self):
+        from origin.core.bootstrap import boot, TALLY
+        from origin.main import main
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "origin.json"
+            first = boot(storage_path=path)
+            first.store.append("human", TALLY, {"count": 41}, first.guardian, note="persist me", step=99)
+
+            second = boot(storage_path=path)  # must not collide on genesis objects
+            self.assertEqual(second.store.read("human", TALLY, second.guardian).payload, {"count": 41})
+            history = second.store.history("human", TALLY, second.guardian)
+            self.assertEqual(len(history), 2)  # genesis not duplicated, nothing lost
+
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                self.assertEqual(main(["--status", "--storage", str(path)]), 0)
+            self.assertIn(str(path), buffer.getvalue())
+
     def test_object_store_crash_matrix_never_loses_acknowledged_history(self):
         from unittest.mock import patch
         from origin.core.capability import Capability

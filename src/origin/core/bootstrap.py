@@ -80,7 +80,7 @@ from .capability import Capability, Right
 from .ids import HUMAN, NUCLEUS
 from .message import Message
 from .nucleus import Nucleus
-from .objects import ObjectStore
+from .objects import ObjectNotFound, ObjectStore
 from .unit import Unit
 
 # Readable Object ids. An id is not a secret: discovering one needs AUDIT or a name
@@ -124,7 +124,9 @@ class System:
         return self.services["naming"]
 
 
-def boot(*, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 24) -> System:
+def boot(
+    *, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 24, storage_path=None
+) -> System:
     """Bring the whole system up and seal the core. Returns a `System` of ids.
 
     `fail_every` makes the flaky Unit raise on every k-th invocation, which is what
@@ -141,7 +143,16 @@ def boot(*, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 
     # The store is gated by the same validator the core uses, so it holds no ambient
     # authority either. This local reference is the only one that exists outside the
     # object_store Unit's arena; bootstrap publishes it on System for tests.
-    store = ObjectStore(nucleus.validate)
+    store = ObjectStore(nucleus.validate, storage_path=storage_path)
+
+    def genesis(*args, **kwargs) -> None:
+        # With a durable store, a restart finds these Objects already present. Their
+        # history is the truth, so booting must never overwrite or duplicate it.
+        try:
+            store.create(*args, **kwargs)
+        except ObjectNotFound:
+            if kwargs.get("object_id") not in store._objects:
+                raise
 
     # --- pass 1: birth the boot Units, which fixes their ids ------------------
     boot: dict[str, Unit] = {kind: nucleus.birth(kind, kind, kind) for kind in constitution.BOOT_ORDER}
@@ -167,14 +178,14 @@ def boot(*, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 
     demo_services = dict(boot_ids)
 
     # --- demo data Objects ----------------------------------------------------
-    store.create(HUMAN, "photo", {"title": "Beach photo", "brightness": 50, "width": 800, "height": 600},
+    genesis(HUMAN, "photo", {"title": "Beach photo", "brightness": 50, "width": 800, "height": 600},
                  guardian, note="genesis", object_id=BEACH_PHOTO)
-    store.create(HUMAN, "photo", {"title": "Sunset photo", "brightness": 40, "width": 1024, "height": 768},
+    genesis(HUMAN, "photo", {"title": "Sunset photo", "brightness": 40, "width": 1024, "height": 768},
                  guardian, note="genesis", object_id=SUNSET_PHOTO)
-    store.create(HUMAN, "counter", {"count": 0}, guardian, note="genesis", object_id=TALLY)
-    store.create(HUMAN, "mailbox", {"owner": "david", "messages": []}, guardian, note="genesis", object_id=MAILBOX_DAVID)
-    store.create(HUMAN, "mailbox", {"owner": "anne", "messages": []}, guardian, note="genesis", object_id=MAILBOX_ANNE)
-    store.create(HUMAN, "log", {"work": 0}, guardian, note="genesis", object_id=FLAKY_LOG)
+    genesis(HUMAN, "counter", {"count": 0}, guardian, note="genesis", object_id=TALLY)
+    genesis(HUMAN, "mailbox", {"owner": "david", "messages": []}, guardian, note="genesis", object_id=MAILBOX_DAVID)
+    genesis(HUMAN, "mailbox", {"owner": "anne", "messages": []}, guardian, note="genesis", object_id=MAILBOX_ANNE)
+    genesis(HUMAN, "log", {"work": 0}, guardian, note="genesis", object_id=FLAKY_LOG)
 
     # --- demo code Objects, then the demo Units themselves -------------------
     # The code payload is {entry, kind, name, params}: exactly what the Improver
@@ -186,7 +197,7 @@ def boot(*, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 
         "flaky": {"services": dict(demo_services), "fail_every": fail_every},
     }
     for kind, oid in CODE_OBJECT.items():
-        store.create(
+        genesis(
             HUMAN, "code",
             {"entry": kind, "kind": kind, "name": kind, "params": demo_params[kind]},
             guardian, note=f"{kind} unit code, seq 0", object_id=oid,

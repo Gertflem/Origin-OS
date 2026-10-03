@@ -43,3 +43,5 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 - [x] 2.3 Load-time history audit: seq gaps and dangling pin/preferred/compacted pointers are detected and reported (`history_damage`, `history.damaged` event), never auto-repaired
 - [x] 2.4 Damaged-but-parseable main snapshot falls back to `.bak` only when the backup is clean and contains every version main holds (no data loss); otherwise main is kept and the damage reported
 - [x] 2.5 Crash-recovery test matrix: simulated kills during tmp write, mid-backup, before replace, after replace; acknowledged history always survives
+- [x] 2.6 Persistence wired into the live system: `boot(storage_path=...)` and `--storage PATH`; genesis Objects are skipped (never overwritten) when they already exist. Before this, the durable store was only reachable from tests.
+- [ ] 2.7 Restart must respawn demo Units from the *preferred* code version, not always seq 0 (Improver work is lost on restart otherwise)
