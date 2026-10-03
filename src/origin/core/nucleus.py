@@ -151,7 +151,26 @@ class Nucleus:
             # code-scoped token and fails it when it tries to mint an unrestricted
             # one. Without the argument a narrow kind grant could be laundered back
             # into a namespace-wide token, making the scoping decorative.
-            self.validate(authority, Right.GRANT, target, grantor, target_kind)
+            authority_rec = self.validate(authority, Right.GRANT, target, grantor, target_kind)
+
+            # Time is a scope too, and this was the one axis attenuation did not
+            # cover: a temporary GRANT could mint a permanent token, turning a loan
+            # into standing authority. That is the axis the human most often limits
+            # on purpose -- intent-time tokens expire (section 5) -- so it is the one
+            # that must not be quietly widened.
+            #
+            # Narrowing stays allowed, so the new token may expire sooner, just never
+            # later and never never. A permanent GRANT has no ceiling to exceed and
+            # can mint anything, including another permanent token.
+            if authority_rec.expires_at_step is not None:
+                ceiling = authority_rec.expires_at_step
+                requested = None if expires_in is None else self._step + expires_in
+                constitution.require(
+                    5,
+                    requested is not None and requested <= ceiling,
+                    f"{grantor} tried to mint a Capability outliving the GRANT it "
+                    f"presented (which expires at step {ceiling})",
+                )
 
         cap = Capability.new()
         self._caps[cap.cap_id] = CapabilityRecord(

@@ -183,10 +183,44 @@ def counter_handler(ctx: UnitContext, msg: Message) -> None:
         return
 
     def on_read(c: UnitContext, reply: Message) -> None:
-        current = int((reply.payload or {}).get("version", {}).get("payload", {}).get("count", 0))
+        # Check that the read actually succeeded before counting from it.
+        #
+        # Without this the default of 0 was used for any failure -- a denied, missing
+        # or compacted read -- so the Unit computed `1` and appended "counted to 1",
+        # reporting a count it never read. Worse, the append's own answer was never
+        # checked either, so a refused append was still reported as `counter.done`
+        # with `seq: None`. Section 8 promises an inspectable result, and a result
+        # that is invented is worse than no result.
+        if reply.verb != "object.read":
+            c.respond(
+                msg,
+                "counter.error",
+                {"object_id": object_id, "reason": f"could not read the counter: {reply.verb} {reply.payload}"},
+            )
+            return
+
+        version = (reply.payload or {}).get("version") or {}
+        payload = version.get("payload") or {}
+        if "count" not in payload:
+            c.respond(
+                msg,
+                "counter.error",
+                {"object_id": object_id, "reason": f"the counter has no count in seq {version.get('seq')}"},
+            )
+            return
+
+        current = int(payload["count"])
         total = current + int(p.get("by", 1))
 
         def on_append(c2: UnitContext, r2: Message) -> None:
+            # Same discipline on the write: a refusal is reported as a refusal.
+            if r2.verb != "object.appended":
+                c2.respond(
+                    msg,
+                    "counter.error",
+                    {"object_id": object_id, "reason": f"the count was not stored: {r2.verb} {r2.payload}"},
+                )
+                return
             c2.respond(
                 msg,
                 "counter.done",
@@ -202,8 +236,13 @@ def counter_handler(ctx: UnitContext, msg: Message) -> None:
         )
 
     read_cap = ctx.hold(Right.READ, object_id)
-    if read_cap is not None:
-        ctx.request(store, "object.read", {"object_id": object_id}, (read_cap,), then=on_read)
+    if read_cap is None:
+        # Previously this was a silent no-op: no reply, no error, no audit entry. A
+        # Unit that cannot do its job must say so, or the human waits for a result
+        # that was never coming.
+        _denied(ctx, msg, Right.READ, object_id)
+        return
+    ctx.request(store, "object.read", {"object_id": object_id}, (read_cap,), then=on_read)
 
 
 @unit_type("flaky")

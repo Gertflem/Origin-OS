@@ -102,7 +102,25 @@ Restart respawns demo Units from the effective code version (preferred, else
 latest) with this boot's service ids overlaid, which is what makes a restart
 indistinguishable from a resume.
 
-## 6. Objects and durability
+## 7. Snapshot integrity
+
+`history_damage` originally checked structure only: seq continuity, dangling
+pin/preferred/compacted pointers. That cannot see a payload altered in place — every
+seq present, no dangling pointers, and a payload that never existed. A tampered
+snapshot loaded as valid history with no quarantine event at all.
+
+Each version now carries a digest of its persisted content, and the load-time audit
+reports a mismatch as `history.payload_digest_mismatch`. This is integrity, not
+authenticity: it catches accidental corruption and unsophisticated tampering, but it
+is not a MAC, so an attacker who can rewrite the file can also recompute the
+digests. A digest-less version — a snapshot from before digests existed — is skipped
+rather than reported, because its absence is not evidence of tampering.
+
+A real adversary needs a key the store does not hold. That is a later phase's
+problem, and the distinction is worth stating rather than blurring: "damaged history
+is evidence" now means something checkable, not aspirational.
+
+## 7. Retention
 
 An Object is its full history. `append()` *is* the write — there is no `save()`,
 because there is no unsaved state. A Unit holds an id plus a Capability and asks.
@@ -132,7 +150,7 @@ Damage is evidence: an unreadable snapshot is quarantined as `.corrupt.<ns>`
 rather than deleted, and a damaged-but-parseable snapshot falls back to `.bak`
 only when the backup provably loses nothing.
 
-## 7. Retention
+## 8. Retention
 
 `retention.py` is an ordinary Unit that applies section 3's tiering on its own.
 
@@ -159,7 +177,7 @@ Improver's. Those report on the system; this one reports only its own policy and
 the sweeps it already performed under authority it demonstrably held, which is the
 same thing `ctx.mem` already is.
 
-## 8. Self-healing
+## 9. Self-healing
 
 `watcher.py` observes invariants and containment events. After
 `--escalate-after` containments it asks `improver.py` to act. The Improver reads
@@ -171,7 +189,7 @@ not a bad *state*. The Improver is denied the rights to modify the Nucleus, and
 `PROTECTED_KINDS` stops it proposing changes to the Watcher, Object store, or
 Console.
 
-## 9. Human control surfaces
+## 10. Human control surfaces
 
 Section 8 asks for two: a clean textual Console, and a Studio that is a "spatial
 continuous canvas of living Objects and Verbs". Both are ordinary Units, and both
@@ -214,7 +232,7 @@ express → resolve → propose capabilities → confirm → execute → inspect
 Every step is a Message. `confirm` mints exactly the token that was quoted,
 scoped to one Object, with an expiry — never a broader grant than was shown.
 
-## 10. Trust boundaries, tested as attacks
+## 11. Trust boundaries, tested as attacks
 
 `TestAuthorityBoundaries` in the test suite is written adversarially: each test is
 an attack that must fail. A security claim is only worth what it is worth when
@@ -222,6 +240,12 @@ someone tries to break it, and a test that exercises the happy path proves nothi
 
 Attacks currently asserted to fail:
 
+- **Spoofed system events.** A `unit.contained` or `store.recovery` from any
+  principal other than the one entitled to assert it. SEND proves reachability, not
+  authority to claim a system fact — without this check, a forged crash escalated to
+  the Improver, which appended to a real code Object and spawned a replacement.
+- **Time-widening through GRANT.** A temporary GRANT minting a permanent token.
+  Narrowing is allowed; outliving the grantor is not.
 - **Escalation.** A delegate widening its own kind-scoped GRANT back to
   namespace-wide. Attenuation is one-directional in every scope.
 - **Reserved rights.** A non-human minting GUARDIAN, GRANT or REVOKE.
@@ -244,7 +268,7 @@ adversary model beyond a misbehaving Unit. A hostile Unit cannot forge a handle,
 but it also cannot be isolated from the host process, so "contained" means frozen
 and stripped of authority, not sandboxed.
 
-## 11. Known limitations
+## 12. Known limitations
 
 - A token may be scoped by Object **id**, by Object **kind**, or left
   namespace-wide, and never by anything broader than what granted it. The

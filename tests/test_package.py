@@ -1013,6 +1013,273 @@ class TestSpoofedSystemEvents(unittest.TestCase):
                          "the optimistic name must not be logged before the kill is confirmed")
 
 
+class TestReviewFindings(unittest.TestCase):
+    """Regressions for the remaining defects found by the adversarial review."""
+
+    # --- finding 1: the Counter reported writes that never happened ----------
+
+    def test_counter_refuses_to_invent_a_count(self):
+        """A failed read must not become `current = 0`, and a refused append must
+        not be reported as `counter.done`.
+
+        The Unit previously defaulted any unreadable reply to 0, computed 1, and
+        appended "counted to 1" -- reporting a number it never read. Section 8
+        promises an inspectable result, and an invented one is worse than none.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        counter = system.services["counter"]
+        store = system.services["object_store"]
+        before = len(system.store._objects[TALLY].versions)
+
+        # A token that is live when the Unit selects it but dead when the store
+        # validates it, so the read is refused after the Unit has committed to it.
+        token = system.nucleus.mint(
+            (__import__("origin.core.capability", fromlist=["Right"]).Right.READ,),
+            TALLY, HUMAN, counter, expires_in=1, authority=system.guardian,
+        )
+        system.nucleus._caps[token.cap_id].expires_at_step = system.nucleus._step + 1
+        system.nucleus._step += 5
+
+        replies = []
+        system.nucleus._output = type(system.nucleus._output)()
+        system.nucleus.send_message(
+            Message(HUMAN, counter, "count", {"object_id": TALLY})
+        )
+        system.nucleus.schedule()
+
+        for entry in system.nucleus.drain_output():
+            replies.append(entry)
+
+        # Nothing may claim success.
+        for entry in replies:
+            self.assertNotEqual(entry["verb"], "counter.done", replies)
+
+        self.assertEqual(len(system.store._objects[TALLY].versions), before,
+                         "a refused read must not produce an appended count")
+
+    def test_counter_says_so_when_it_holds_no_read(self):
+        """Previously a silent no-op: no reply, no error, nothing in the trail."""
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        counter = system.services["counter"]
+        # Strip its READ on the tally, as a revoked token would.
+        for rec in system.nucleus._caps.values():
+            if counter in rec.holders:
+                rec.revoked = True
+
+        system.nucleus.send_message(Message(HUMAN, counter, "count", {"object_id": TALLY}))
+        system.nucleus.schedule()
+
+        verbs = [e["verb"] for e in system.nucleus.drain_output()]
+        self.assertTrue(verbs, "the Counter must answer, even to refuse")
+
+    # --- finding 4: a temporary GRANT could mint a permanent token ----------
+
+    def test_a_temporary_grant_cannot_mint_permanent_authority(self):
+        """Time is a scope, and it was the one axis attenuation did not cover.
+
+        Converting a temporary GRANT into a permanent token turns a loan into
+        standing authority, on exactly the axis the human limits on purpose when
+        intent-time tokens expire (section 5).
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+        from origin.core.constitution import InvariantViolation
+
+        system = boot()
+        console = system.services["console"]
+        grant = system.nucleus.mint((Right.GRANT,), None, "human", console,
+                                    expires_in=10, authority=system.guardian)
+        ceiling = system.nucleus._caps[grant.cap_id].expires_at_step
+
+        # Narrowing in time is allowed: same expiry, and shorter.
+        same = system.nucleus.mint((Right.READ,), None, console, console,
+                                   expires_in=10, authority=grant)
+        self.assertEqual(system.nucleus._caps[same.cap_id].expires_at_step, ceiling)
+        shorter = system.nucleus.mint((Right.READ,), None, console, console,
+                                      expires_in=3, authority=grant)
+        self.assertLess(system.nucleus._caps[shorter.cap_id].expires_at_step, ceiling)
+
+        # Widening in time is not.
+        with self.assertRaises(InvariantViolation):
+            system.nucleus.mint((Right.READ,), None, console, console,
+                                expires_in=None, authority=grant)
+        with self.assertRaises(InvariantViolation):
+            system.nucleus.mint((Right.READ,), None, console, console,
+                                expires_in=9999, authority=grant)
+
+    def test_a_permanent_grant_can_still_mint_permanent(self):
+        """Otherwise the new rule would break every standing GRANT in the system."""
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+
+        system = boot()
+        console = system.services["console"]
+        grant = system.nucleus.mint((Right.GRANT,), None, "human", console,
+                                    expires_in=None, authority=system.guardian)
+        minted = system.nucleus.mint((Right.READ,), None, console, console,
+                                     expires_in=None, authority=grant)
+        self.assertIsNone(system.nucleus._caps[minted.cap_id].expires_at_step)
+
+    # --- finding 5: studio.report contained the Studio ----------------------
+
+    def test_studio_report_does_not_contain_the_studio(self):
+        """A human-facing service was frozen by its own public verb.
+
+        `studio.report` reads `ctx.mem["validator"]`, and the Studio's arena had no
+        validator, so the verb raised KeyError and the core contained the Studio.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        studio = system.services["studio"]
+        self.assertIn("validator", system.nucleus._arenas[studio],
+                      "the Studio's arena must carry the validator its verbs read")
+
+        system.nucleus.send_message(
+            Message(HUMAN, studio, "studio.report", {"limit": 5}, caps=(system.guardian,))
+        )
+        system.nucleus.schedule()
+
+        unit = system.nucleus._units[studio]
+        self.assertNotEqual(unit.state.value, "frozen", "the Studio must survive its own report")
+        self.assertEqual(unit.crashes, 0)
+
+    # --- finding 6: reply() misaddressed an overridden reply ----------------
+
+    def test_reply_goes_to_the_requester_even_with_an_explicit_sender(self):
+        """A reply that says who speaks must not also decide where it goes.
+
+        `reply(sender='c')` reused the override for the recipient too, producing a
+        self-addressed message. Latent while every call site used the default.
+        """
+        from origin.core.message import Message
+
+        request = Message(sender="a", recipient="b", verb="ask")
+        answer = request.reply("x.result", sender="c")
+        self.assertEqual(answer.sender, "c")
+        self.assertEqual(answer.recipient, "a", "the reply must go back to whoever asked")
+
+    # --- finding 8: prefer() accepted a compacted version -------------------
+
+    def test_prefer_refuses_a_compacted_version(self):
+        """`effective()` returns the preferred version without raising.
+
+        So a pointer at reclaimed payloads handed every consumer a `None` state --
+        and the restart path reads through `effective()`, meaning a demo Unit could
+        be respawned from nothing.
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import CompactedError, ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-prefer")
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+        store.compact("alice", obj.object_id, cap, keep_recent=2)
+
+        reclaimed = sorted(store._objects[obj.object_id].compacted)
+        self.assertTrue(reclaimed)
+        with self.assertRaises(CompactedError):
+            store.prefer("alice", obj.object_id, reclaimed[0], cap)
+
+        # A version whose payload survived can still be preferred.
+        store.prefer("alice", obj.object_id, store._objects[obj.object_id].latest_seq, cap)
+        self.assertIsNotNone(store._objects[obj.object_id].effective().payload)
+
+    # --- finding 7: a tampered snapshot loaded as valid --------------------
+
+    def test_a_tampered_payload_is_reported_as_damage(self):
+        """Structural checks cannot see a payload altered in place.
+
+        Every seq present, no dangling pointers, and a payload that never existed.
+        Now the load reports it rather than serving it as true history.
+        """
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-tamper")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "journal", {"text": "original"}, cap, step=1)
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("digest", data[obj.object_id]["versions"][0],
+                          "versions must be written with a digest")
+            data[obj.object_id]["versions"][0]["payload"] = {"text": "tampered"}
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            reopened = ObjectStore(validator, storage_path=path)
+            kinds = [d["kind"] for d in reopened.history_damage]
+            self.assertIn("history.payload_digest_mismatch", kinds, reopened.history_damage)
+            self.assertTrue(
+                any("damage" in e["kind"] for e in reopened.recovery_events),
+                reopened.recovery_events,
+            )
+
+    def test_an_untampered_snapshot_reports_no_damage(self):
+        """The digest check must not fire on the normal path."""
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-clean")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "journal", {"text": "original"}, cap, step=1)
+            for t in range(1, 5):
+                store.append("human", obj.object_id, {"text": f"v{t}"}, cap, step=t + 1)
+            store.pin("human", obj.object_id, 1, cap)
+            store.compact("human", obj.object_id, cap, keep_recent=2)
+
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.history_damage, [],
+                             "compaction and pinning must not look like tampering")
+
+    def test_an_older_snapshot_without_digests_is_not_called_damaged(self):
+        """A file from before digests existed is not evidence of tampering."""
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-legacy")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            legacy = {
+                "obj_legacy": {
+                    "kind": "journal",
+                    "created_step": 0,
+                    "versions": [
+                        {"seq": 0, "payload": {"t": 0}, "author": "human", "step": 0,
+                         "note": "genesis", "acked": True}
+                    ],
+                    "pins": [],
+                    "compacted": [],
+                    "preferred": None,
+                }
+            }
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.history_damage, [])
+            self.assertEqual(reopened.read("human", "obj_legacy", cap).payload, {"t": 0})
+
+
 class TestVersionedIntents(unittest.TestCase):
     """Phase 3: history, undo and restore, reachable by plain language.
 

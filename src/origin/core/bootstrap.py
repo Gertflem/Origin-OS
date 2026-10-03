@@ -175,6 +175,10 @@ def boot(
     # operation — it can neither mint, revoke, nor route) and the live store object.
     # These go in the arena, not in params, because a bound method is not data.
     boot["object_store"].arena["store"] = store
+    # Every Unit that answers a request needing an authority check gets the
+    # validator. Keeping this list correct matters: a Unit whose verb path reads
+    # `ctx.mem["validator"]` without one is contained by its own public verb, which
+    # is exactly what happened to the Studio.
     for kind in ("naming", "watcher", "improver"):
         boot[kind].arena["validator"] = nucleus.validate
 
@@ -287,6 +291,12 @@ def boot(
     # and overwriting params here would silently reset it to the defaults.
     retention.arena["params"]["services"] = dict(all_services)
     studio.arena["params"] = {"services": dict(all_services)}
+    # The Studio answers `studio.report`, which validates the requester's AUDIT
+    # token through the injected validator. Without this the verb raises KeyError
+    # and the core freezes the Studio on its own public command -- found by the
+    # adversarial review, and only reachable because I wired that verb but forgot
+    # its one dependency.
+    studio.arena["validator"] = nucleus.validate
 
     # --- standing authority, scoped as tightly as each job allows ------------
     def grant(rights, target, holder, label):

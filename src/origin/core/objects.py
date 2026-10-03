@@ -31,6 +31,7 @@ this module assumes the backing store is memory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -59,6 +60,11 @@ class Version:
     step: int
     note: str = ""
     acked: bool = True
+    #: Digest of this version's persisted content, as written by `_snapshot`. It is
+    #: evidence, not state: `None` means "this version was never written with a
+    #: digest" (an older snapshot, or a version built in memory), and the load-time
+    #: audit skips those rather than calling them tampered.
+    digest: Optional[str] = None
 
     def describe(self, *, payload: bool = True) -> dict:
         d = {
@@ -182,6 +188,45 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
+# --- Payload integrity --------------------------------------------------------
+#
+# Structural damage detection (seq gaps, dangling pointers) cannot see a payload
+# that was altered in place: every seq is still present, so the history looks
+# perfect while describing something that never happened. A digest of the payload
+# as it is persisted catches that, and turns a silent misrepresentation into a
+# reported finding.
+#
+# This is integrity, not authenticity. It detects accidental corruption and
+# unsophisticated tampering; it is not a MAC, so an attacker who can rewrite the
+# file can also recompute the digests. A real adversary needs a key the store does
+# not have, which is a later phase's problem -- the point here is that "damaged
+# history is evidence" now means something checkable rather than aspirational.
+_VERSION_DIGEST_KEY = b"origin/version-digest/v1"
+
+
+def version_digest(version: "Version") -> str:
+    """A stable digest of one version's persisted content.
+
+    Includes the payload and the metadata that gives a version its identity, so a
+    digest match means the whole record is what this store wrote. Compacted
+    versions legitimately have a `None` payload and are digested as such, so
+    compaction does not invalidate the digests of the records around it.
+    """
+    encoded = json.dumps(
+        {
+            "seq": version.seq,
+            "payload": version.payload,
+            "author": version.author,
+            "step": version.step,
+            "note": version.note,
+            "acked": version.acked,
+        },
+        sort_keys=True,
+        default=_json_default,
+    ).encode("utf-8")
+    return hashlib.blake2b(encoded, key=_VERSION_DIGEST_KEY, digest_size=16).hexdigest()
+
+
 # --- Durable rename -----------------------------------------------------------
 #
 # `os.replace` is atomic, but atomic is not the same as durable. The rename that
@@ -290,6 +335,12 @@ class ObjectStore:
                         "step": v.step,
                         "note": v.note,
                         "acked": v.acked,
+                        # Per-version digest of the payload as persisted. Lets a
+                        # load detect content that changed underneath it, which
+                        # structural checks (seq continuity, dangling pointers)
+                        # cannot: a snapshot with every seq present but one payload
+                        # swapped is structurally perfect and factually false.
+                        "digest": version_digest(v),
                     }
                     for v in obj.versions
                 ],
@@ -479,6 +530,7 @@ class ObjectStore:
                     step=v["step"],
                     note=v.get("note", ""),
                     acked=v.get("acked", True),
+                    digest=v.get("digest"),
                 )
                 for v in item.get("versions", [])
             ]
@@ -516,6 +568,19 @@ class ObjectStore:
             if pointers - known:
                 damage.append(
                     {"kind": "history.dangling_pointer", "object": object_id, "seqs": sorted(pointers - known)}
+                )
+            # Content integrity, where the snapshot recorded a digest to check
+            # against. Older snapshots have none, and a missing digest is not
+            # evidence of tampering -- it is simply a file from before the digest
+            # existed, so it is not reported as damage.
+            mismatched = [
+                v.seq
+                for v in obj.versions
+                if v.digest is not None and v.digest != version_digest(v)
+            ]
+            if mismatched:
+                damage.append(
+                    {"kind": "history.payload_digest_mismatch", "object": object_id, "seqs": mismatched}
                 )
         return damage
 
@@ -754,10 +819,22 @@ class ObjectStore:
         This is the Improver's lever and it is deliberately not a write: the
         superseded version stays in history, so preferring an older seq is a
         complete rollback.
+
+        A version whose payload has been compacted cannot be preferred. `effective()`
+        returns the preferred version without raising, so a pointer at reclaimed
+        payloads would hand every consumer a `None` state -- and the restart path
+        reads through `effective()`, so the demo Unit would be respawned from
+        nothing. Refusing here keeps the invariant in one place instead of making
+        every `effective()` caller defend against it.
         """
         obj = self._object(object_id)
         self._check(cap, Right.APPEND, object_id, holder)
         obj.get(seq)
+        if seq in obj.compacted:
+            raise CompactedError(
+                f"cannot prefer {object_id}@{seq}: its payload was compacted. "
+                "Metadata is retained; the payload is not recoverable"
+            )
         obj.preferred = seq
         self._persist()
 

@@ -63,7 +63,13 @@ class Message:
         """
         return Message(
             sender=sender or self.recipient,
-            recipient=sender or self.sender,
+            # Who to answer, decided by who asked. Reusing `sender` for the recipient
+            # too meant `reply(..., sender='c')` produced a self-addressed message
+            # from c to c instead of c to the requester -- a reply saying who speaks
+            # silently also decided where it went. Latent while every call site used
+            # the default; wrong the moment a third party answered on someone's
+            # behalf.
+            recipient=self.sender,
             verb=verb,
             payload=payload,
             caps=caps,

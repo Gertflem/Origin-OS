@@ -58,6 +58,17 @@ which is portable and a more precise description of the crash window.
 - [ ] Studio: the canvas is text-rendered, not graphical. It carries position and grouping, but a real spatial surface would need a display the simulation does not have
 - [x] 3.4 Intent loop reaches versioned history: `history`, `undo` and `restore` by plain language, including ordinal and positional references ("the last version", "the second version"). `undo` only ever reads an earlier version — no authority over current state — so it cannot become a destructive operation wearing a reassuring name. `restore` moves the preferred pointer, the same mechanism the Improver uses, so it stays reversible. Nonexistent versions are refused with the real range rather than clamped
 - [x] 3.5 Trust boundaries asserted as attacks (Phase 4 groundwork): `TestAuthorityBoundaries` tries to escalate a kind-scoped grant, mint reserved rights as a delegate, present another principal's token, use a forged handle, use a revoked copy, use an expired token, inherit authority across kinds, and re-home a running Unit's tokens. All eleven must fail, and they do. The security model was already sound — this makes the claim falsifiable rather than asserted
+- [x] 3.6 Independent adversarial review (`REVIEW_BRIEF.md`), and the fixes it produced:
+  - `_json_default` returned `None` for non-set payloads, so acknowledged versions were written to disk as `null`. Author's own regression from the doc-consolidation session, invisible from Windows
+  - `_flush_directory` held two stray lines that raised `NameError` on every POSIX persist. That platform has never worked
+  - the Watcher accepted `unit.contained` and `store.recovery` from any holder of SEND, so any service could fabricate a crash and have the Improver rewrite real code at runtime
+  - a temporary GRANT could mint a permanent token: time was the one axis attenuation did not cover
+  - the Studio had no injected validator, so `studio.report` contained the Studio with its own verb
+  - the Counter defaulted an unreadable reply to 0 and reported refused appends as `counter.done` — inventing counts
+  - `Message.reply(sender=...)` misaddressed the reply to the override instead of the requester
+  - `prefer()` accepted a compacted seq, so `effective()` handed consumers a `None` state and restart could respawn a Unit from nothing
+  - snapshot integrity was structural only: a tampered payload loaded as valid history. Each version now carries a digest of its persisted content
+- [ ] The digest is integrity, not authenticity — an attacker who can rewrite the file can recompute it. A MAC the store does not hold the key for is the real fix, and is later-phase work
 - [ ] Intent loop: the verb table is still rule-based. That is deliberate (section 8 wants every step inspectable) but it means coverage grows one verb at a time
 
 ## Working rule
