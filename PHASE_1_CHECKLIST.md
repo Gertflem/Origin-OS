@@ -40,4 +40,5 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 - [x] 2.1 Corrupt main snapshot no longer silently wipes memory: previous good snapshot kept as `.bak`, damaged file quarantined as `.corrupt.<ns>`, load falls back to backup
 - [x] 2.2 Recovery events (quarantine/restore/unrecoverable) recorded on the store and shown in `--status`
 - [ ] 2.2b Forward recovery events into the Nucleus audit trail (needs a message-based path, store must not gain ambient access)
-- [ ] 2.3 Detect acknowledged-version loss on load (seq gaps / validation of loaded history)
+- [x] 2.3 Load-time history audit: seq gaps and dangling pin/preferred/compacted pointers are detected and reported (`history_damage`, `history.damaged` event), never auto-repaired
+- [ ] 2.4 Fall back to `.bak` when main snapshot parses but fails the history audit

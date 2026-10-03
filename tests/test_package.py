@@ -58,6 +58,31 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_object_store_detects_history_damage_on_load(self):
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-integrity")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            first = ObjectStore(validator, storage_path=path)
+            obj = first.create("alice", "journal", {"t": 0}, cap, step=1)
+            first.append("alice", obj.object_id, {"t": 1}, cap, step=2)
+            first.append("alice", obj.object_id, {"t": 2}, cap, step=3)
+            self.assertEqual(ObjectStore(validator, storage_path=path).history_damage, [])
+
+            data = json.loads(path.read_text())
+            data[obj.object_id]["versions"].pop(1)  # silently lose an acknowledged version
+            data[obj.object_id]["pins"] = [9]  # pin pointing at nothing
+            path.write_text(json.dumps(data))
+
+            damaged = ObjectStore(validator, storage_path=path)
+            kinds = sorted(d["kind"] for d in damaged.history_damage)
+            self.assertEqual(kinds, ["history.dangling_pointer", "history.seq_gap"])
+            self.assertIn("history.damaged", [e["kind"] for e in damaged.recovery_events])
+
     def test_object_store_reports_recovery_events(self):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore

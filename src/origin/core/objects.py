@@ -180,6 +180,8 @@ class ObjectStore:
         self._objects: dict[str, Object] = {}
         #: Facts about recovery done at load time, readable by the operator.
         self.recovery_events: list[dict] = []
+        #: Integrity findings from the last load. Reported, never auto-repaired.
+        self.history_damage: list[dict] = []
         self._validate = validator
         self._storage_path = Path(storage_path) if storage_path is not None else None
         if self._storage_path is not None:
@@ -315,6 +317,31 @@ class ObjectStore:
             obj.compacted = set(item.get("compacted", []))
             obj.preferred = item.get("preferred")
             self._objects[object_id] = obj
+        self._audit_history()
+
+    def _audit_history(self) -> None:
+        """Check loaded history for lost or dangling versions.
+
+        Versions keep their metadata forever (compaction only reclaims payloads),
+        so seqs must run 0..n-1 with no holes. A hole means an acknowledged
+        version vanished. We report it and leave the data alone: repairing
+        history silently would be its own violation of section 3.
+        """
+        self.history_damage = []
+        for object_id, obj in self._objects.items():
+            seqs = [v.seq for v in obj.versions]
+            if seqs != list(range(len(seqs))):
+                self.history_damage.append({"kind": "history.seq_gap", "object": object_id, "seqs": seqs})
+            known = set(seqs)
+            pointers = set(obj.pins) | set(obj.compacted)
+            if obj.preferred is not None:
+                pointers.add(obj.preferred)
+            if pointers - known:
+                self.history_damage.append(
+                    {"kind": "history.dangling_pointer", "object": object_id, "seqs": sorted(pointers - known)}
+                )
+        if self.history_damage:
+            self.recovery_events.append({"kind": "history.damaged", "count": len(self.history_damage)})
 
     # --- authority -------------------------------------------------------
     def _check(self, cap: Optional[Capability], right: Right, target: Optional[str], holder: str) -> None:
