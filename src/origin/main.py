@@ -54,7 +54,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /status  /objects  /reclaimable  /sweep  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
+  Inspect freely:      /status  /objects  /reclaimable  /sweep  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /retention  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>   /spawn <kind> <name>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
@@ -734,6 +734,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="steps an intent-time Capability lives before it expires (default 24)")
     parser.add_argument("--storage", metavar="PATH", default=None,
                         help="persist Objects to this file; state survives restarts (default: in-memory)")
+    retention = parser.add_argument_group("retention policy (section 3)")
+    retention.add_argument("--no-retention", action="store_true",
+                           help="do not let the Retention Unit reclaim history automatically")
+    retention.add_argument("--keep-recent", type=int, default=3,
+                           help="versions kept at full fidelity per Object (default 3)")
+    retention.add_argument("--min-versions", type=int, default=32,
+                           help="skip Objects whose history is shorter than this (default 32)")
     args = parser.parse_args(argv)
 
     system = boot(
@@ -741,6 +748,9 @@ def main(argv: list[str] | None = None) -> int:
         escalate_after=args.escalate_after,
         token_lifetime=args.token_lifetime,
         storage_path=args.storage,
+        retention_enabled=not args.no_retention,
+        retention_keep_recent=args.keep_recent,
+        retention_min_versions=args.min_versions,
     )
     if args.demo:
         _demo(system)

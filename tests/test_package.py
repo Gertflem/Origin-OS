@@ -357,6 +357,145 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(report["objects_swept"], 0)
         self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
 
+    def test_confirming_an_ambiguous_intent_does_not_execute_it(self):
+        """An unresolved ambiguity is not confirmable.
+
+        Confirming used to execute the plan with its target still unset, which came
+        back as "REFUSED — no APPEND Capability for this target". That is a
+        capability error standing in for "you never picked one", so the human was
+        told they lacked authority for a choice they had not been asked to make.
+        """
+        from origin.core.bootstrap import boot
+        from origin.main import _handle
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            # "the" is deliberately ambiguous across the seeded photo bindings.
+            self.assertTrue(_handle(system, "count the photo"))
+        first = buffer.getvalue()
+        self.assertIn("not sure what", first)
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertTrue(_handle(system, "confirm"))
+        output = buffer.getvalue()
+        self.assertIn("still ambiguous", output)
+        # Crucially: no capability refusal masquerading as the answer.
+        self.assertNotIn("REFUSED", output)
+        self.assertNotIn("no APPEND Capability", output)
+
+    def test_retention_unit_reclaims_history_without_being_asked(self):
+        """Section 3's tiering policy must actually run, unattended.
+
+        Until the Retention Unit existed the policy only ran when a human typed
+        `/sweep apply`, so in practice it never ran. This asserts the automatic
+        path: appends happen, the store ticks the Retention Unit, and payloads are
+        reclaimed with no operator involvement.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot(retention_min_versions=5, retention_keep_recent=2)
+        store_id = system.services["object_store"]
+        retention_id = system.services["retention"]
+
+        for t in range(1, 14):
+            system.nucleus.send_message(
+                Message(HUMAN, store_id, "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(system.guardian,))
+            )
+        system.nucleus.schedule()
+
+        obj = system.store._objects[TALLY]
+        self.assertTrue(obj.compacted, "retention should have reclaimed something")
+        # Current state is intact and the newest version survives at full fidelity.
+        self.assertEqual(system.store.read(HUMAN, TALLY, system.guardian).payload, {"count": 13})
+        self.assertEqual(
+            system.store.read(HUMAN, TALLY, system.guardian, seq=obj.latest_seq).payload, {"count": 13}
+        )
+        # Reclaimed payloads are gone but their metadata is retained (invariant 7).
+        history = {v["seq"]: v for v in system.store.history(HUMAN, TALLY, system.guardian)}
+        self.assertTrue(history[0]["compacted"])
+        self.assertEqual(history[0]["author"], HUMAN)
+        # And it happened through the Unit, which recorded what it did.
+        log = system.nucleus._arenas[retention_id]["log"]
+        self.assertTrue(any(e.get("versions_reclaimed") for e in log), log)
+
+    def test_retention_is_dry_run_unless_apply_is_set(self):
+        """Guards the polarity of the `apply` flag.
+
+        `apply` maps to sweep's `dry_run` parameter, inverted. Getting that backwards
+        would make an automated sweep silently reclaim nothing while reporting
+        success -- a failure that looks like success, which is the worst kind.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot(retention_min_versions=5, retention_keep_recent=2)
+        store_id = system.services["object_store"]
+        for t in range(1, 14):
+            system.nucleus.send_message(
+                Message(HUMAN, store_id, "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(system.guardian,))
+            )
+        system.nucleus.schedule()
+
+        # Enabled by default and it really did reclaim.
+        self.assertTrue(system.store._objects[TALLY].compacted)
+
+        # Disabled: appends must leave history untouched.
+        quiet = boot(retention_enabled=False, retention_min_versions=5, retention_keep_recent=2)
+        for t in range(1, 14):
+            quiet.nucleus.send_message(
+                Message(HUMAN, quiet.services["object_store"], "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(quiet.guardian,))
+            )
+        quiet.nucleus.schedule()
+        self.assertEqual(quiet.store._objects[TALLY].compacted, set())
+
+    def test_retention_holds_no_authority_beyond_reclaiming(self):
+        """Section 5: authority exists only as explicit, narrow Capabilities.
+
+        The Retention Unit may reclaim payloads and report on itself. It must not
+        be able to inspect the system, mint authority, kill Units, or spawn them --
+        a housekeeping Unit with any of those is a much larger blast radius than
+        its job requires.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+
+        system = boot()
+        retention_id = system.services["retention"]
+        held = set()
+        for rec in system.nucleus._caps.values():
+            if retention_id in rec.holders:
+                held |= rec.rights
+
+        self.assertIn(Right.PIN, held)
+        self.assertIn(Right.SEND, held)
+        for forbidden in (Right.AUDIT, Right.GRANT, Right.REVOKE, Right.KILL, Right.FREEZE,
+                          Right.SPAWN, Right.GUARDIAN):
+            self.assertNotIn(forbidden, held, f"retention must not hold {forbidden}")
+
+    def test_retention_is_an_ordinary_unit_not_a_boot_unit(self):
+        """It must be killable, replaceable, and absent from the Constitution's set.
+
+        Section 9 fixes the boot set as the Units the system cannot run without.
+        Housekeeping is not that: if this Unit dies the system still works, history
+        just stops being reclaimed. Growing BOOT_ORDER would make it
+        unkillable-by-accident.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.constitution import BOOT_ORDER, is_boot_unit
+
+        self.assertNotIn("retention", BOOT_ORDER)
+        self.assertFalse(is_boot_unit("retention"))
+        system = boot()
+        self.assertIn("retention", system.services)
+
     def test_kind_scoped_token_covers_any_object_of_that_kind(self):
         """A kind scope is about the kind, not a list of ids.
 

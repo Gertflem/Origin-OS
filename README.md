@@ -62,6 +62,9 @@ Run the scripted tour:
 py -m origin --demo
 ```
 
+By default the Retention Unit is on. Turn it off with
+`--no-retention` if you want to watch history grow untouched.
+
 Print a runtime summary without entering the REPL:
 
 ```bash
@@ -122,6 +125,18 @@ Compaction is tiered, never deletion: a reclaimed version keeps its seq, author,
 step and note forever, and the sweep appends a marker version naming exactly what
 it reclaimed. Pinned and preferred versions are never reclaimed.
 
+You do not have to run any of that. The Retention Unit applies the same policy on
+its own whenever an append grows an Object past the threshold, and `/retention`
+shows its policy and its log:
+
+```text
+/retention
+```
+
+It holds `PIN` and nothing else beyond `SEND` — no inspection, no delegation, no
+spawn. If it dies the system keeps working; history just stops being reclaimed and
+`/retention` says so.
+
 ## Run the tests
 
 ```bash
@@ -160,6 +175,7 @@ Origin/
 │       ├── improver.py      diagnoses failures, proposes versions
 │       ├── naming.py        names, intent resolution
 │       ├── object_store.py  persistent storage as a service
+│       ├── retention.py     applies the tiered-retention policy
 │       └── watcher.py       detects invariant violations
 ├── tests/
 │   └── test_package.py

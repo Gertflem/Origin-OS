@@ -125,7 +125,15 @@ class System:
 
 
 def boot(
-    *, fail_every: int = 2, escalate_after: int = 1, token_lifetime: int = 24, storage_path=None
+    *,
+    fail_every: int = 2,
+    escalate_after: int = 1,
+    token_lifetime: int = 24,
+    storage_path=None,
+    retention_enabled: bool = True,
+    retention_keep_recent: int = 3,
+    retention_min_versions: int = 32,
+    retention_interval: int = 0,
 ) -> System:
     """Bring the whole system up and seal the core. Returns a `System` of ids.
 
@@ -133,6 +141,11 @@ def boot(
     gives the self-healing loop something deterministic to heal. `escalate_after` is
     how many containments the Watcher waits before asking the Improver to act; 1
     means it escalates immediately, which is what the demo wants.
+
+    The `retention_*` arguments configure section 3's tiering policy, which runs in
+    the Retention Unit. They default to on but conservative: nothing is reclaimed
+    until an Object's history passes `retention_min_versions`, and only the most
+    recent `retention_keep_recent` versions are ever at risk.
     """
     nucleus = Nucleus()
 
@@ -227,8 +240,28 @@ def boot(
         )
     demo_ids = {kind: unit.unit_id for kind, unit in demo.items()}
 
+    # The Retention Unit is a demo Unit rather than a sixth boot Unit, on purpose.
+    # Section 9's boot set is the ordered set of Units the system cannot run
+    # without, and housekeeping is not that: if this Unit dies the system still
+    # works, history just stops being reclaimed and the operator finds out via
+    # /retention. Adding it to BOOT_ORDER would make it unkillable-by-accident and
+    # quietly grow the set the Constitution fixed. It is spawned like any other
+    # agent, holds a code Object, and can be improved or rolled back normally.
+    retention = nucleus.spawn(
+        HUMAN, "retention", "retention", "retention",
+        params={
+            "services": {},
+            "keep_recent": retention_keep_recent,
+            "min_versions": retention_min_versions,
+            "interval": retention_interval,
+            "enabled": retention_enabled,
+        },
+        authority=guardian,
+    )
+    retention_id = retention.unit_id
+
     # --- pass 2: the full services map, a fresh copy per Unit ----------------
-    all_services = {**boot_ids, **demo_ids}
+    all_services = {**boot_ids, **demo_ids, "retention": retention_id}
     boot["object_store"].arena["params"] = {"services": dict(all_services)}
     boot["naming"].arena["params"] = {"services": dict(all_services)}
     boot["console"].arena["params"] = {
@@ -239,6 +272,9 @@ def boot(
     }
     boot["watcher"].arena["params"] = {"services": dict(all_services), "escalate_after": escalate_after}
     boot["improver"].arena["params"] = {"services": dict(all_services), "max_attempts": 2}
+    # Merge, do not replace: this Unit's retention policy was set when it spawned
+    # and overwriting params here would silently reset it to the defaults.
+    retention.arena["params"]["services"] = dict(all_services)
 
     # --- standing authority, scoped as tightly as each job allows ------------
     def grant(rights, target, holder, label):
@@ -277,6 +313,15 @@ def boot(
         nucleus.mint(rights, None, HUMAN, holder, label=label, target_kind=target_kind)
 
     grant_kind((Right.READ, Right.APPEND), "code", improver_id, "improver: READ+APPEND -> code Objects")
+
+    # The Retention Unit may reclaim payloads, and that is all. PIN because section
+    # 5 makes retention a human decision and compaction is gated on PIN for the same
+    # reason; SEND to the two services it coordinates with; and nothing else. It has
+    # no AUDIT (it need not inspect), no GRANT or REVOKE (it cannot widen or withdraw
+    # authority), no KILL, and no SPAWN. The narrowest grant that lets the policy run.
+    grant((Right.PIN,), None, retention_id, "retention: namespace PIN")
+    grant((Right.SEND,), object_store_id, retention_id, "retention: SEND -> object_store")
+    grant((Right.SEND,), console_id, retention_id, "retention: SEND -> console")
     grant((Right.SPAWN,), None, improver_id, "improver: namespace SPAWN")
     grant((Right.SEND,), NUCLEUS, improver_id, "improver: SEND -> nucleus")
     grant((Right.SEND,), console_id, improver_id, "improver: SEND -> console")

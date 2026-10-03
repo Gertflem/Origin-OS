@@ -66,10 +66,12 @@ HELP = f"""Origin — {__phase__}. Say what you want, or use a command.
     /log [n]           the last n notices and console events
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
+    /retention [n]     the retention policy and its last n sweeps
     /powers            the Nucleus's own account of its powers
     /reclaimable [n]   what compaction could reclaim, per Object and store-wide
     /sweep [k] [m] [apply]
                        run the retention policy store-wide (preview without apply)
+    /retention [n]     the Retention Unit: policy, and its own sweep log
 
   actions (proposed first, executed only on 'confirm')
     /focus [name]      show or set what "this" and "it" refer to
@@ -415,6 +417,18 @@ def _input(ctx: UnitContext, text: str) -> None:
 
     if pending is not None:
         if low in CONFIRM:
+            # An unresolved ambiguity is not confirmable. Confirming here used to
+            # execute the plan with its target still unset, which reached the store
+            # with no target and came back as "REFUSED — no APPEND Capability" --
+            # a capability error standing in for "you never picked one". The human
+            # answered the wrong question: they were asked to choose, not to approve.
+            if pending.get("choices"):
+                _say(
+                    ctx,
+                    "Not yet — the intent is still ambiguous. Choose a number "
+                    f"(1-{len(pending['choices'])}), or 'cancel'.",
+                )
+                return
             ctx.mem["pending"] = None
             _execute(ctx, pending["action"])
             return
@@ -471,7 +485,7 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd == "log":
         _log(ctx, int(rest[0]) if rest and rest[0].isdigit() else 20)
 
-    elif cmd in ("watcher", "improver"):
+    elif cmd in ("watcher", "improver", "retention"):
         _inspect_unit(ctx, cmd, rest)
 
     elif cmd == "focus":
@@ -618,13 +632,13 @@ def _inspect_unit(ctx: UnitContext, what: str, rest: list[str]) -> None:
     if cap is None:
         return
 
-    service_name = "watcher" if what == "watcher" else "improver"
+    service_name = {"watcher": "watcher", "improver": "improver", "retention": "retention"}[what]
     service = _services(ctx).get(service_name)
     if service is None:
         _say(ctx, f"No {what} Unit is running, so there is nothing to inspect.")
         return
 
-    verb = "watcher.report" if what == "watcher" else "improve.report"
+    verb = {"watcher": "watcher.report", "improver": "improve.report", "retention": "retention.report"}[what]
     limit = int(rest[0]) if rest and rest[0].isdigit() else 20
 
     def shown(c: UnitContext, reply: Message) -> None:
@@ -637,7 +651,27 @@ def _inspect_unit(ctx: UnitContext, what: str, rest: list[str]) -> None:
             return
 
         lines = [f"Origin {what}"]
-        if what == "watcher":
+        if what == "retention":
+            events = p.get("events", [])
+            state = "running" if p.get("enabled") else "disabled"
+            lines.append(
+                f"  {state}, keeping {p.get('keep_recent')} recent, skipping Objects under "
+                f"{p.get('min_versions')} versions, every {p.get('interval')} steps"
+            )
+            lines.append(f"  last acted at step {p.get('last_sweep', 0)}")
+            lines.append(f"  {len(events)} recorded events")
+            for entry in events[-limit:]:
+                extra = ""
+                if entry.get("versions_reclaimed") is not None:
+                    extra = (
+                        f"{entry['versions_reclaimed']} version(s) across "
+                        f"{entry.get('objects_swept', 0)} Object(s)"
+                    )
+                lines.append(
+                    f"  step {entry.get('at_step', 0):>4}  {entry.get('event', 'event'):<16} "
+                    f"{entry.get('reason', '') or extra}".rstrip()
+                )
+        elif what == "watcher":
             events = p.get("events", [])
             escalations = p.get("escalations", {})
             lines.append(f"  {len(events)} events")

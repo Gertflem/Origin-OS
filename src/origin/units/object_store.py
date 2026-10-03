@@ -31,6 +31,24 @@ def _cap_of(msg: Message):
     return msg.caps[0] if msg.caps else None
 
 
+def _tick_retention(ctx: UnitContext) -> None:
+    """Tell the Retention Unit that history just grew.
+
+    This is the whole trigger mechanism. Origin has no clock and section 4 says
+    Units sleep at zero cost until a Message arrives, so a housekeeping Unit that
+    waited for a deadline would either burn the scheduler doing nothing or need a
+    timer in the privileged core -- and "run timers" is not one of section 2's
+    powers. So retention is driven by the event that makes it necessary: an append.
+
+    Fire-and-forget and deliberately unaimed. The Retention Unit decides whether
+    this append is enough to act on, and it holds the PIN token the sweep needs, so
+    this Unit neither decides policy nor carries the authority to enforce it.
+    """
+    retention = ctx.mem.get("params", {}).get("services", {}).get("retention")
+    if retention:
+        ctx.send(retention, "retention.tick", {"source": "append"})
+
+
 @unit_type("object_store")
 def object_store_handler(ctx: UnitContext, msg: Message) -> None:
     store: ObjectStore = ctx.mem["store"]
@@ -61,6 +79,7 @@ def object_store_handler(ctx: UnitContext, msg: Message) -> None:
                 step=ctx.step,
             )
             ctx.respond(msg, "object.appended", {"object_id": payload["object_id"], "seq": v.seq})
+            _tick_retention(ctx)
 
         elif verb == "object.read":
             v = store.read(msg.sender, payload["object_id"], cap, payload.get("seq"))
@@ -97,15 +116,20 @@ def object_store_handler(ctx: UnitContext, msg: Message) -> None:
 
         elif verb == "object.sweep":
             # Automatic retention. Section 3 states tiering as a policy, and a
-            # policy nobody applies is just a comment -- so it runs here. Dry run
-            # by default: automatic reclamation of durable memory has to be asked
-            # for, not stumbled into.
+            # policy nobody applies is just a comment -- so it runs here.
+            #
+            # Dry run unless `apply` is set, so this verb stays safe to call from
+            # anywhere. Note the inversion: the *request* field is `apply`, and it
+            # maps to sweep's `dry_run` parameter. Getting that backwards would
+            # make an automated sweep silently do nothing while reporting success,
+            # which is worse than an outright failure -- so the polarity is
+            # asserted by a regression rather than trusted.
             report = store.sweep(
                 msg.sender,
                 cap,
                 keep_recent=int(payload.get("keep_recent", 3)),
                 min_versions=int(payload.get("min_versions", 32)),
-                dry_run=bool(payload.get("apply", False)),
+                dry_run=not bool(payload.get("apply", False)),
             )
             ctx.respond(msg, "object.swept", report)
 

@@ -132,7 +132,34 @@ Damage is evidence: an unreadable snapshot is quarantined as `.corrupt.<ns>`
 rather than deleted, and a damaged-but-parseable snapshot falls back to `.bak`
 only when the backup provably loses nothing.
 
-## 7. Self-healing
+## 7. Retention
+
+`retention.py` is an ordinary Unit that applies section 3's tiering on its own.
+
+It is triggered by appends, not by a clock, and that is a constitutional
+constraint rather than a shortcut. Section 4 says Units are reactive and sleep at
+zero cost; section 2's power list for the Nucleus does not include timers. A
+housekeeping Unit waiting for a deadline would either burn the scheduler spinning
+or push a timer into the one component that must stay tiny. So the Object store
+tells the Retention Unit when history grew — the event that makes retention
+necessary — and the Unit decides whether to act.
+
+It holds `PIN` and `SEND`, and nothing else: no AUDIT, GRANT, REVOKE, KILL, or
+SPAWN. A regression asserts that, because a housekeeping Unit holding inspection
+or delegation authority has a far larger blast radius than its job needs.
+
+It is a demo Unit, not a sixth boot Unit. Section 9's boot set is the Units the
+system cannot run without, and housekeeping is not among them — if this Unit dies
+the system still works, history just stops being reclaimed, and `/retention` says
+so. Adding it to `BOOT_ORDER` would make it unkillable-by-accident and quietly grow
+the set the Constitution fixed.
+
+`retention.report` is deliberately *not* AUDIT-gated, unlike the Watcher's and
+Improver's. Those report on the system; this one reports only its own policy and
+the sweeps it already performed under authority it demonstrably held, which is the
+same thing `ctx.mem` already is.
+
+## 8. Self-healing
 
 `watcher.py` observes invariants and containment events. After
 `--escalate-after` containments it asks `improver.py` to act. The Improver reads
@@ -144,7 +171,7 @@ not a bad *state*. The Improver is denied the rights to modify the Nucleus, and
 `PROTECTED_KINDS` stops it proposing changes to the Watcher, Object store, or
 Console.
 
-## 8. Human control surface
+## 9. Human control surface
 
 `console.py` is the human's console and is deliberately unprivileged: five
 standing tokens (SEND, RESOLVE, BIND, AUDIT, GRANT). It cannot read a photo,
@@ -159,7 +186,7 @@ express → resolve → propose capabilities → confirm → execute → inspect
 Every step is a Message. `confirm` mints exactly the token that was quoted,
 scoped to one Object, with an expiry — never a broader grant than was shown.
 
-## 9. Known limitations
+## 10. Known limitations
 
 - A token may be scoped by Object **id**, by Object **kind**, or left
   namespace-wide, and never by anything broader than what granted it. The
@@ -175,10 +202,11 @@ scoped to one Object, with an expiry — never a broader grant than was shown.
   so killing that Unit mid-run still discards in-memory state. With a configured
   storage path a restart recovers from the snapshot; without one, data is lost.
   This is why the Watcher protects it and the Improver is denied it.
-- Retention tiering applies, but only when asked. `ObjectStore.sweep` runs
-  section 3's policy store-wide, reusing the same selection function `compact`
-  acts on, and it is a dry run until `apply` is passed. Nothing compacts on a
-  timer yet, so history still grows between sweeps.
+- Version metadata still accumulates on append-heavy Objects. Every sweep appends
+  a marker version naming what it reclaimed, which invariant 7 requires, so an
+  Object written in a tight loop grows its version list faster than an unwatched
+  one. Payloads stay bounded, which is the point; `min_versions` is the knob that
+  controls how often this happens.
 - The Console, the Naming Unit and the Object store are protected from
   self-improvement by `PROTECTED_KINDS` rather than by authority. That list is
   policy in an ordinary Unit, so it is only as trustworthy as the Unit holding
