@@ -17,6 +17,11 @@ The Constitution permits no foundational concepts beyond these:
 | Messages | `core/message.py` | the only communication channel |
 | Nucleus | `core/nucleus.py` | minimal privileged core |
 
+`core/core_verbs.py` is not a sixth primitive. It is the table of verbs the
+Nucleus answers, lifted out of `Nucleus` so the dispatch cannot become an
+application layer growing inside the privileged core. `CORE_VERBS` is derived
+from that table's keys rather than listed beside it.
+
 ## 2. The privilege boundary
 
 ```text
@@ -67,6 +72,16 @@ so the Nucleus and the test suite check them instead of trusting prose.
 revoke Capabilities, route Messages, handle interrupts, freeze or kill Units, and
 birth the boot Units. Nothing else.
 
+The verb table lives in `core/core_verbs.py`, and `_execute_core_verb` delegates
+to it. This matters for more than tidiness: a branching `if verb == ...` chain
+inside the Nucleus is exactly how an application layer starts growing in the one
+place the Constitution says must stay tiny. Two properties are now structural
+rather than aspirational. `CORE_VERBS` is derived from the dispatch table, so a
+verb cannot be reachable without also being declared. And the table holds no
+authority logic of its own — each handler takes the token off the Message and
+hands it to the Nucleus method that validates and records it, so the audit trail
+stays the Nucleus's to keep.
+
 It drops nearly all power at `seal()`, after bootstrap. From that point every
 action — including the core's own — requires a Capability. The Console banner
 states this, because it is the property that makes the rest coherent.
@@ -102,6 +117,15 @@ fsynced, the previous good snapshot kept as `.bak`, then atomically renamed and
 the parent directory flushed. A crash anywhere in that sequence leaves either the
 old or the new snapshot intact, never neither — which is what the crash matrix in
 `tests/test_package.py` asserts at four distinct injection points.
+
+The directory flush is not optional bookkeeping. The rename lives in the parent
+directory's metadata, so until that entry is flushed a power failure can lose the
+rename even though the file's contents were fsynced. Windows refuses to open a
+directory as a file handle, so this needs `CreateFileW` with
+`FILE_FLAG_BACKUP_SEMANTICS` and `FlushFileBuffers`. When it still cannot be done,
+`_persist` records a `durability.degraded` event instead of swallowing the
+failure — the acknowledged version survives, but the operator is told the
+guarantee is weaker rather than left to assume it.
 
 Damage is evidence: an unreadable snapshot is quarantined as `.corrupt.<ns>`
 rather than deleted, and a damaged-but-parseable snapshot falls back to `.bak`
@@ -144,6 +168,12 @@ scoped to one Object, with an expiry — never a broader grant than was shown.
   so killing that Unit mid-run still discards in-memory state. With a configured
   storage path a restart recovers from the snapshot; without one, data is lost.
   This is why the Watcher protects it and the Improver is denied it.
-- Retention tiering is operator-driven. `/reclaimable` reports what compaction
-  would reclaim, but nothing compacts automatically, so history grows until
-  someone intervenes.
+- Retention tiering applies, but only when asked. `ObjectStore.sweep` runs
+  section 3's policy store-wide, reusing the same selection function `compact`
+  acts on, and it is a dry run until `apply` is passed. Nothing compacts on a
+  timer yet, so history still grows between sweeps.
+- The Console, the Naming Unit and the Object store are protected from
+  self-improvement by `PROTECTED_KINDS` rather than by authority. That list is
+  policy in an ordinary Unit, so it is only as trustworthy as the Unit holding
+  it — the real structural protection is that `object_store` and `nucleus` have
+  no code Object to rewrite.

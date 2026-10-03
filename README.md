@@ -36,10 +36,14 @@ CLI prints lives in `origin/__init__.py` as `__phase__`.
 The intent loop works end to end: a plain-language request becomes a scoped
 Capability proposal, the human confirms, and the Unit appends a new version.
 
-## Quick start
+| Phase | State |
+|---|---|
+| 0 — Design stabilization | complete |
+| 1 — Pure simulation | complete (1.1–1.10) |
+| 2 — Persistent object substrate | complete (2.1–2.10) |
+| 3 — Minimal interactive system | current |
 
-MIT — see [LICENSE](LICENSE). Deliberately permissive: the project's argument is
-that the whole picture should be readable and reimplementable by others.
+## Quick start
 
 ```bash
 py -m pip install -e .
@@ -103,11 +107,29 @@ The report is read-only. It lists reclaimable versions and bytes per Object and
 store-wide, and never offers pinned, preferred, recent, or already-compacted
 versions. `--status` also shows a one-line summary.
 
+## Run the retention policy
+
+`/reclaimable` answers "what *could* be reclaimed". `/sweep` applies section 3's
+tiering across the whole store, and previews until you say otherwise:
+
+```text
+/sweep                # preview: keeping 3 recent per Object, skipping Objects under 32 versions
+/sweep 5 16           # preview with a different window and floor
+/sweep 3 8 apply      # actually compact
+```
+
+Compaction is tiered, never deletion: a reclaimed version keeps its seq, author,
+step and note forever, and the sweep appends a marker version naming exactly what
+it reclaimed. Pinned and preferred versions are never reclaimed.
+
 ## Run the tests
 
 ```bash
 py -m unittest discover -s tests
 ```
+
+On Windows use `py`, not `python` — the `python` alias is often shadowed by the
+Microsoft Store shim.
 
 ## Project structure
 

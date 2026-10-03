@@ -15,4 +15,4 @@ __version__ = "0.1.0"
 #: means the label can no longer quietly drift out of date.
 #:
 #: PROGRESS.md is the checklist this label summarises; update both together.
-__phase__ = "Phase 2 complete — Persistent Object Substrate"
+__phase__ = "Phase 3, Minimal Interactive System (phases 0-2 complete)"

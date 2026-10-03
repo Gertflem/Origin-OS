@@ -41,6 +41,7 @@ retention a deliberate, visible choice.
 - [x] 2.8a Compaction bugs fixed: the preferred version is never reclaimed (it was; reading it then raised CompactedError and broke Unit respawn), and the compaction marker keeps the Object's real current state instead of replacing it with bookkeeping
 - [x] 2.8b Operator report of reclaimable history: `ObjectStore.reclaimable_report`, the `object.reclaimable` verb, `/reclaimable [keep_recent]`, and a `--status` summary line. Read-only, AUDIT-gated, built on the same selection function `compact` uses, so the preview cannot disagree with the action
 - [x] 2.9 Durable rename on Windows: the post-rename directory flush was silently skipped (Windows refuses to open a directory as a file handle) and is now performed via `CreateFileW`/`FlushFileBuffers`; a flush that still fails is reported as a `durability.degraded` event rather than swallowed
+- [x] 2.10 Retention tiering runs as policy: `ObjectStore.sweep` applies section 3's tiering store-wide instead of leaving it to one-Operator-at-a-time intervention. Dry run by default, `min_versions` floor so short histories stay whole, selection shared with `compact` and `reclaimable_report`. Exposed as `/sweep [keep_recent] [min_versions] [apply]`
 
 ### Phase 2 notes
 
@@ -51,10 +52,10 @@ which is portable and a more precise description of the crash window.
 
 ## Current phase: Phase 3 — Minimal interactive system
 
-- [ ] Full intent loop demonstrated end to end as the primary path, not a tour
 - [ ] Studio Unit: the spatial canvas of living Objects and Verbs (section 8's long-term interface)
-- [ ] Richer retention policy: the tiering in section 3 is still operator-driven, so history grows until someone intervenes
-- [ ] Capability targets addressable by kind/namespace, so a token can be scoped to code Objects rather than all Objects (currently caps the Improver holds)
+- [ ] Capability targets addressable by kind/namespace, so a token can be scoped to code Objects rather than all Objects (this is what caps the Improver's APPEND today)
+- [ ] Sweep wired into a scheduled Unit so retention runs without the operator typing `/sweep apply`
+- [ ] Intent loop widened past the current verb set (deictic follow-ups and compound recipients already work)
 
 ## Working rule
 
