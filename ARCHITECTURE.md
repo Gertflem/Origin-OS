@@ -109,16 +109,38 @@ pin/preferred/compacted pointers. That cannot see a payload altered in place —
 seq present, no dangling pointers, and a payload that never existed. A tampered
 snapshot loaded as valid history with no quarantine event at all.
 
-Each version now carries a digest of its persisted content, and the load-time audit
-reports a mismatch as `history.payload_digest_mismatch`. This is integrity, not
-authenticity: it catches accidental corruption and unsophisticated tampering, but it
-is not a MAC, so an attacker who can rewrite the file can also recompute the
-digests. A digest-less version — a snapshot from before digests existed — is skipped
-rather than reported, because its absence is not evidence of tampering.
+Each version now carries a digest of its persisted content, and each Object carries
+one covering `kind`, `created_step`, `pins`, `compacted` and `preferred`. The
+load-time audit reports a mismatch as `history.payload_digest_mismatch` or
+`history.object_digest_mismatch`.
 
-A real adversary needs a key the store does not hold. That is a later phase's
-problem, and the distinction is worth stating rather than blurring: "damaged history
-is evidence" now means something checkable, not aspirational.
+**What the digests actually verify.** They answer one question: *does this file still
+match what this store wrote?* They are verified against the file's own content, so
+they are file-vs-file consistency — strong against corruption and unsophisticated
+tampering, and quiet on every legitimate operation. That quietness is structural, not
+lucky: `version_digest` is deterministic, the same encoder runs on both sides, and
+every mutation funnels through `_persist → _snapshot`. Pinning, preferring,
+compacting and reloading all leave the digests matching.
+
+**What they do not verify.** Two boundaries, both real:
+
+- **Not authenticity.** There is no MAC, so an attacker who can rewrite the file can
+  also recompute the digests. A real adversary needs a key the store does not hold —
+  later-phase work.
+- **Not authoring-time truth.** The digest is recomputed from the same payload object
+  it persists, so an in-place mutation of a stored payload produces no finding at all.
+  `obj.versions[0].payload["n"] = 2` rewrites history; the next persist hashes the
+  mutated content and the original acknowledged version is simply gone, with
+  `history_damage == []`. `Version` is a frozen dataclass, but `payload` is a mutable
+  container — the freeze protects the fields, not the contents.
+
+  Nothing in the tree does this, and the digests are not wrong for failing to catch
+  it: they were never asked to. But it is a different question from the one they
+  answer, and it would be easy to over-claim here. Fixing it means hashing a stored
+  copy rather than the live object, at the cost of a copy per version.
+
+A digest-less record — a snapshot from before digests existed — is skipped rather
+than reported, because its absence is not evidence of tampering.
 
 ## 7. Retention
 
@@ -150,6 +172,23 @@ Damage is evidence: an unreadable snapshot is quarantined as `.corrupt.<ns>`
 rather than deleted, and a damaged-but-parseable snapshot falls back to `.bak`
 only when the backup provably loses nothing.
 
+Three load-time paths deserve naming, because each was a way for recovery to fail
+silently:
+
+- **A valid JSON file is not a valid snapshot.** A missing `kind`, a missing
+  `payload`, or a top level that is a list used to raise out of the constructor,
+  wedging every subsequent boot with the bad file still in place and `.bak` never
+  consulted. `_build` is guarded; the file is quarantined as `snapshot.malformed`,
+  `.bak` is tried, and if that is malformed too the outcome is
+  `snapshot.unrecoverable`.
+- **Promoting a `.tmp` is a recovery, and is reported as one.** A crash during fsync
+  leaves a complete `.tmp` behind, which used to return as a version the caller was
+  told had failed — with `recovery_events == []`. Now `snapshot.tmp_promoted`.
+- **A valid but older `.tmp` is a recovery candidate, not rubbish.** It was being
+  deleted before `main` was even examined, discarding a snapshot that was newer than
+  `.bak` and would have healed a corrupt main outright. It is kept as `.bak` when it
+  is the better candidate.
+
 ## 8. Retention
 
 `retention.py` is an ordinary Unit that applies section 3's tiering on its own.
@@ -162,9 +201,23 @@ or push a timer into the one component that must stay tiny. So the Object store
 tells the Retention Unit when history grew — the event that makes retention
 necessary — and the Unit decides whether to act.
 
+The tick is throttled to every 16 appends rather than every one. Per-append ticking
+made the cost of a single write O(total versions in the store): the adversarial
+review measured 60 appends producing 113 versions and 25 KB of snapshot for a live
+payload of about 40 bytes. Live payloads now stay bounded regardless of how often
+writes arrive.
+
 It holds `PIN` and `SEND`, and nothing else: no AUDIT, GRANT, REVOKE, KILL, or
 SPAWN. A regression asserts that, because a housekeeping Unit holding inspection
 or delegation authority has a far larger blast radius than its job needs.
+
+Changing the policy is itself gated: `retention.configure` requires the caller's
+namespace PIN. That is deliberate, not incidental. If any principal that could
+address this Unit could set `min_versions=0`, then the next append would trigger a
+near-total compaction under *this Unit's* token — so the `apply` flag being safe
+would be no consolation when the policy itself can be steered by the caller. The
+gate caught its own author: the first version wrote `ctx.mem[key]`, a key nothing
+reads, so a configure appeared to succeed and changed nothing.
 
 It is a demo Unit, not a sixth boot Unit. Section 9's boot set is the Units the
 system cannot run without, and housekeeping is not among them — if this Unit dies
@@ -223,6 +276,12 @@ addressable by seq. A version reference that does not exist is refused with the
 range that does, rather than clamped to the nearest one, because a clamped answer
 would be indistinguishable from a real one.
 
+`restore` cannot point at a version whose payload has been compacted. `effective()`
+returns the preferred version without raising, so such a pointer handed every
+consumer a `None` state — and restart reads through `effective()`, meaning a Unit
+could be respawned from nothing. Refused at the pointer, so the invariant lives in
+one place rather than being defended against in every caller.
+
 The intent loop the Console implements is section 8's promise:
 
 ```text
@@ -240,14 +299,19 @@ someone tries to break it, and a test that exercises the happy path proves nothi
 
 Attacks currently asserted to fail:
 
-- **Spoofed system events.** A `unit.contained` or `store.recovery` from any
-  principal other than the one entitled to assert it. SEND proves reachability, not
-  authority to claim a system fact — without this check, a forged crash escalated to
-  the Improver, which appended to a real code Object and spawned a replacement.
+- **Spoofed system events.** A `unit.contained`, `store.recovery` or
+  `nucleus.sealed` from any principal other than the one entitled to assert it. SEND
+  proves reachability, not authority to claim a system fact — without the first of
+  those checks, a forged crash escalated to the Improver, which appended to a real
+  code Object and spawned a replacement. The seal is cheaper but no less a lie: it is
+  the one message the human reads as a statement about the whole system.
 - **Time-widening through GRANT.** A temporary GRANT minting a permanent token.
   Narrowing is allowed; outliving the grantor is not.
 - **Escalation.** A delegate widening its own kind-scoped GRANT back to
-  namespace-wide. Attenuation is one-directional in every scope.
+  namespace-wide. Attenuation is one-directional in every scope. The test drives this
+  through the `mint` *verb*, because that is the only path a Unit has: the first
+  version of this check called `Nucleus.mint` in-process, passed, and left the
+  feature broken on the wire because the verb dropped `target_kind`.
 - **Reserved rights.** A non-human minting GUARDIAN, GRANT or REVOKE.
 - **Possession confused with delegation.** One principal spending another's token.
   Without this check, any service could accumulate ambient authority as a side
