@@ -198,6 +198,7 @@ Origin/
 ├── CONTRIBUTING.md      how to work on this codebase
 ├── PROGRESS.md          what is built and verified
 ├── REVIEW_BRIEF.md      how to get an independent adversarial review
+├── VERIFY_BRIEF.md      how to review the fixes for that review
 ├── VISION.md            why an OS for agents looks like this
 ├── pyproject.toml
 ├── src/origin/
