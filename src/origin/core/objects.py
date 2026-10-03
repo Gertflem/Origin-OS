@@ -178,6 +178,8 @@ class ObjectStore:
 
     def __init__(self, validator: Validator, *, storage_path: Optional[str | os.PathLike[str]] = None) -> None:
         self._objects: dict[str, Object] = {}
+        #: Facts about recovery done at load time, readable by the operator.
+        self.recovery_events: list[dict] = []
         self._validate = validator
         self._storage_path = Path(storage_path) if storage_path is not None else None
         if self._storage_path is not None:
@@ -238,7 +240,8 @@ class ObjectStore:
         try:
             os.replace(self._storage_path, target)
         except OSError:
-            pass
+            return
+        self.recovery_events.append({"kind": "snapshot.quarantined", "file": target.name})
 
     def _load(self) -> None:
         if self._storage_path is None:
@@ -280,8 +283,10 @@ class ObjectStore:
             self._quarantine()
             payload = _load_json(self._backup_path())
             if payload is None:
+                self.recovery_events.append({"kind": "snapshot.unrecoverable"})
                 self._objects = {}
                 return
+            self.recovery_events.append({"kind": "snapshot.restored_from_backup"})
 
         if promoted:
             try:

@@ -380,6 +380,8 @@ def _status(system: System) -> None:
     print(f"  pinned versions: {pinned_versions}")
     print(f"  storage: {storage_path or 'memory'}")
     print(f"  temp snapshot: {'present' if temp_snapshot else 'clean'}")
+    events = getattr(system.store, "recovery_events", [])
+    print(f"  recovery events: {', '.join(e['kind'] for e in events) if events else 'none'}")
     console_unit = getattr(system.nucleus, "_units", {}).get(system.console)
     focus = getattr(console_unit, "arena", {}).get("focus", {}) if console_unit is not None else {}
     focus_name = focus.get("name") or focus.get("object_id") or focus.get("recipient_name") or "none"

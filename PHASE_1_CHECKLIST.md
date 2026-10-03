@@ -38,5 +38,6 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 ## Phase 2 progress
 
 - [x] 2.1 Corrupt main snapshot no longer silently wipes memory: previous good snapshot kept as `.bak`, damaged file quarantined as `.corrupt.<ns>`, load falls back to backup
-- [ ] 2.2 Surface recovery events (quarantine/fallback) in `--status` and the audit trail
+- [x] 2.2 Recovery events (quarantine/restore/unrecoverable) recorded on the store and shown in `--status`
+- [ ] 2.2b Forward recovery events into the Nucleus audit trail (needs a message-based path, store must not gain ambient access)
 - [ ] 2.3 Detect acknowledged-version loss on load (seq gaps / validation of loaded history)

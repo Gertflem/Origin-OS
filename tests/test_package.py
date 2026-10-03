@@ -58,6 +58,23 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_object_store_reports_recovery_events(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-events")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            first = ObjectStore(validator, storage_path=path)
+            self.assertEqual(first.recovery_events, [])
+            first.create("alice", "journal", {"t": 1}, cap, step=1)
+            first.create("alice", "journal", {"t": 2}, cap, step=2)
+            path.write_text("garbage", encoding="utf-8")
+            recovered = ObjectStore(validator, storage_path=path)
+            kinds = [e["kind"] for e in recovered.recovery_events]
+            self.assertEqual(kinds, ["snapshot.quarantined", "snapshot.restored_from_backup"])
+
     def test_object_store_recovers_from_corrupt_main_snapshot_via_backup(self):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
