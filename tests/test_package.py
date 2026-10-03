@@ -58,6 +58,65 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_object_store_crash_matrix_never_loses_acknowledged_history(self):
+        from unittest.mock import patch
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+        import origin.core.objects as objmod
+
+        class Crash(BaseException):
+            pass
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-crash")
+        real_fsync, real_replace, real_copy = os.fsync, os.replace, objmod.shutil.copy2
+
+        def run(point):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "objects.json"
+                store = ObjectStore(validator, storage_path=path)
+                obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+                store.append("alice", obj.object_id, {"t": 1}, cap, step=2)
+                calls = {"fsync": 0}
+
+                def fsync(fd):
+                    calls["fsync"] += 1
+                    if point == "during_tmp_write":
+                        # tmp left half-written
+                        raise Crash()
+                    if point == "after_replace" and calls["fsync"] >= 2:
+                        raise Crash()
+                    return real_fsync(fd)
+
+                def copy(*a, **k):
+                    if point == "mid_backup":
+                        raise Crash()
+                    return real_copy(*a, **k)
+
+                def replace(*a, **k):
+                    if point == "before_replace":
+                        raise Crash()
+                    return real_replace(*a, **k)
+
+                with patch.object(objmod.os, "fsync", fsync), patch.object(objmod.shutil, "copy2", copy), \
+                        patch.object(objmod.os, "replace", replace):
+                    with self.assertRaises(Crash):  # the injected crash must really fire
+                        store.append("alice", obj.object_id, {"t": 2}, cap, step=3)
+                reopened = ObjectStore(validator, storage_path=path)
+                return reopened, obj.object_id
+
+        for point in ("during_tmp_write", "mid_backup", "before_replace", "after_replace"):
+            with self.subTest(point=point):
+                reopened, oid = run(point)
+                self.assertEqual(reopened.history_damage, [])
+                # Everything acknowledged before the crash must survive.
+                self.assertEqual(reopened.read("alice", oid, cap, seq=0).payload, {"t": 0})
+                self.assertEqual(reopened.read("alice", oid, cap, seq=1).payload, {"t": 1})
+                latest = reopened.read("alice", oid, cap).payload
+                self.assertIn(latest, ({"t": 1}, {"t": 2}))
+                if point == "after_replace":
+                    self.assertEqual(latest, {"t": 2})
+
     def test_object_store_falls_back_to_backup_only_when_it_loses_nothing(self):
         import json
         from origin.core.capability import Capability
