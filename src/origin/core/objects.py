@@ -162,6 +162,79 @@ Validator = Callable[[Capability, Right, Optional[str], str], Any]
 def _json_default(value: Any) -> Any:
     if isinstance(value, set):
         return sorted(value)
+
+
+# --- Durable rename -----------------------------------------------------------
+#
+# `os.replace` is atomic, but atomic is not the same as durable. The rename that
+# points the main snapshot at the freshly written temp file lives in the *parent
+# directory's* metadata, and until that directory entry is flushed the rename can
+# still be lost on power failure — leaving a file whose contents were fsynced but
+# which was never actually linked into place.
+#
+# POSIX: open the directory and fsync it.
+# Windows: refuses to open a directory as a file handle at all (it raises
+#   PermissionError), so we go through CreateFileW with
+#   FILE_FLAG_BACKUP_SEMANTICS and FlushFileBuffers. Skipping this step used to
+#   look harmless because the failure was caught and ignored, but it silently
+#   downgraded the durability guarantee on the platform the project actually runs
+#   on. A missing directory flush is now reported, never swallowed.
+
+
+def _flush_directory_windows(path: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+
+    # FlushFileBuffers needs GENERIC_WRITE, which is why this cannot be a plain read handle.
+    handle = create_file(
+        str(path),
+        GENERIC_WRITE,
+        FILE_SHARE_ALL,
+        None,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if handle == INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    try:
+        if not kernel32.FlushFileBuffers(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _flush_directory(path: Path) -> None:
+    """Flush a directory entry so a rename into it survives power loss."""
+    if os.name == "nt":
+        _flush_directory_windows(path)
+        return
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     if hasattr(value, "__dict__"):
         return value.__dict__
     return str(value)
@@ -225,13 +298,16 @@ class ObjectStore:
             shutil.copy2(self._storage_path, self._backup_path())
         os.replace(tmp_path, self._storage_path)
         try:
-            dir_fd = os.open(str(self._storage_path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except (AttributeError, OSError, NotImplementedError):
-            pass
+            _flush_directory(self._storage_path.parent)
+        except (AttributeError, OSError, NotImplementedError) as exc:
+            # The rename is atomic but only becomes durable once the parent
+            # directory entry is flushed. If that fails the acknowledged version
+            # is still intact in the file itself, so this is a weakened guarantee
+            # rather than data loss -- but it must be visible to the operator
+            # instead of vanishing into an ignored exception.
+            self.recovery_events.append(
+                {"kind": "durability.degraded", "reason": "directory_flush_failed", "detail": str(exc)}
+            )
 
     def _backup_path(self) -> Path:
         return self._storage_path.with_suffix(f"{self._storage_path.suffix}.bak")

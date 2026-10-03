@@ -175,8 +175,6 @@ class TestPackage(unittest.TestCase):
                     if point == "during_tmp_write":
                         # tmp left half-written
                         raise Crash()
-                    if point == "after_replace" and calls["fsync"] >= 2:
-                        raise Crash()
                     return real_fsync(fd)
 
                 def copy(*a, **k):
@@ -189,8 +187,20 @@ class TestPackage(unittest.TestCase):
                         raise Crash()
                     return real_replace(*a, **k)
 
+                def flush_dir(*a, **k):
+                    # "after_replace" is the window between the atomic rename and
+                    # the directory flush that makes it durable. Injecting here by
+                    # patching the flush seam keeps the test portable: counting
+                    # fsync calls only works on POSIX, where the directory flush is
+                    # an fsync, and silently skipped the case on Windows.
+                    if point == "after_replace":
+                        raise Crash()
+                    return real_flush_dir(*a, **k)
+
+                real_flush_dir = objmod._flush_directory
                 with patch.object(objmod.os, "fsync", fsync), patch.object(objmod.shutil, "copy2", copy), \
-                        patch.object(objmod.os, "replace", replace):
+                        patch.object(objmod.os, "replace", replace), \
+                        patch.object(objmod, "_flush_directory", flush_dir):
                     with self.assertRaises(Crash):  # the injected crash must really fire
                         store.append("alice", obj.object_id, {"t": 2}, cap, step=3)
                 reopened = ObjectStore(validator, storage_path=path)
@@ -207,6 +217,52 @@ class TestPackage(unittest.TestCase):
                 self.assertIn(latest, ({"t": 1}, {"t": 2}))
                 if point == "after_replace":
                     self.assertEqual(latest, {"t": 2})
+
+    def test_directory_flush_actually_runs_on_this_platform(self):
+        """The rename must really be made durable, not quietly skipped.
+
+        A directory flush used to be wrapped in `except OSError: pass`. On
+        Windows `os.open(dir)` always raises PermissionError, so the guarantee
+        was silently absent on the platform the project actually runs on. This
+        test fails if the flush degrades into a no-op again.
+        """
+        import origin.core.objects as objmod
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "sentinel.txt"
+            target.write_text("durable", encoding="utf-8")
+            objmod._flush_directory(Path(tmpdir))  # must not raise on any platform
+
+    def test_failed_directory_flush_is_reported_not_swallowed(self):
+        """A weakened durability guarantee has to reach the operator.
+
+        The acknowledged version still survives -- the rename is atomic and the
+        file contents were fsynced -- so this is a weaker promise, not data loss.
+        Silently swallowing it would violate invariant 7: nothing the human has
+        been told exists may be silently lost.
+        """
+        from unittest.mock import patch
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+        import origin.core.objects as objmod
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-degraded")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+
+            with patch.object(objmod, "_flush_directory", side_effect=OSError("no flush here")):
+                obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+
+            degraded = [e for e in store.recovery_events if e["kind"] == "durability.degraded"]
+            self.assertEqual(len(degraded), 1, store.recovery_events)
+            self.assertEqual(degraded[0]["reason"], "directory_flush_failed")
+
+            # The data itself must still be intact and still readable.
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.read("alice", obj.object_id, cap).payload, {"t": 0})
 
     def test_object_store_falls_back_to_backup_only_when_it_loses_nothing(self):
         import json
