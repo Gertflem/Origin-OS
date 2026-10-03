@@ -135,6 +135,21 @@ def watcher_handler(ctx: UnitContext, msg: Message) -> None:
             ctx.respond(msg, "watcher.denied", {"reason": str(exc)})
         return
 
+    if msg.verb == "store.recovery":
+        # The durable store repaired or flagged itself while loading. Operators
+        # must see that: silent self-repair is exactly what section 8 forbids.
+        p = msg.payload or {}
+        events.append(
+            {"event": "store.recovery", "recovery": p.get("recovery", []), "damage": p.get("damage", []), "at_step": ctx.step}
+        )
+        kinds = ", ".join(e.get("kind", "?") for e in p.get("recovery", [])) or "none"
+        ctx.send(
+            services.get("console", ""),
+            "console.notice",
+            {"text": f"object store recovered at load: {kinds}; damage findings: {len(p.get('damage', []))}"},
+        )
+        return
+
     if msg.verb == "nucleus.sealed":
         events.append({"event": "sealed", "at_step": ctx.step})
         return

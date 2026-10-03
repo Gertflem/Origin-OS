@@ -39,9 +39,10 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 
 - [x] 2.1 Corrupt main snapshot no longer silently wipes memory: previous good snapshot kept as `.bak`, damaged file quarantined as `.corrupt.<ns>`, load falls back to backup
 - [x] 2.2 Recovery events (quarantine/restore/unrecoverable) recorded on the store and shown in `--status`
-- [ ] 2.2b Forward recovery events into the Nucleus audit trail (needs a message-based path, store must not gain ambient access)
+- [x] 2.2b Recovery events reach the Watcher (and the audit trail as a routed message) via a boot-time `store.recovery` message; the store itself holds no audit access
 - [x] 2.3 Load-time history audit: seq gaps and dangling pin/preferred/compacted pointers are detected and reported (`history_damage`, `history.damaged` event), never auto-repaired
 - [x] 2.4 Damaged-but-parseable main snapshot falls back to `.bak` only when the backup is clean and contains every version main holds (no data loss); otherwise main is kept and the damage reported
 - [x] 2.5 Crash-recovery test matrix: simulated kills during tmp write, mid-backup, before replace, after replace; acknowledged history always survives
 - [x] 2.6 Persistence wired into the live system: `boot(storage_path=...)` and `--storage PATH`; genesis Objects are skipped (never overwritten) when they already exist. Before this, the durable store was only reachable from tests.
 - [x] 2.7 Restart respawns demo Units from the effective (preferred-else-latest) code version with this boot's service ids overlaid; re-preferring seq 0 is honoured
+- [ ] 2.8 Compaction and retention policy: configurable tiers, operator report of reclaimable history, pinned/preferred never reclaimed (verify)

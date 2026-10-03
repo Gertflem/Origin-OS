@@ -311,6 +311,21 @@ def boot(
             )
         )
 
+    # If the durable store had to repair itself while loading, say so through the
+    # system's own channel. The store keeps no reference to the audit trail (that
+    # would be ambient authority); boot, speaking as the human, reports its
+    # findings to the Watcher like any other message, and routing audits it.
+    if store.recovery_events or store.history_damage:
+        nucleus.send_message(
+            Message(
+                sender=HUMAN,
+                recipient=watcher_id,
+                verb="store.recovery",
+                payload={"recovery": list(store.recovery_events), "damage": list(store.history_damage)},
+                caps=(guardian,),
+            )
+        )
+
     # --- spend the fuse -------------------------------------------------------
     # seal() drops ambient mint/birth and interrupts every Unit. schedule() then
     # flushes the queued name.bind messages and the sealed signals in one pass.

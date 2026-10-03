@@ -58,6 +58,29 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_store_recovery_events_reach_watcher_and_audit_trail(self):
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "origin.json"
+            boot(storage_path=path)
+            path.write_text("garbage", encoding="utf-8")
+            system = boot(storage_path=path)
+
+            watcher = system.nucleus._units[system.services["watcher"]]
+            kinds = [e.get("event") for e in watcher.arena["events"]]
+            self.assertIn("store.recovery", kinds)
+            ev = next(e for e in watcher.arena["events"] if e.get("event") == "store.recovery")
+            self.assertEqual([x["kind"] for x in ev["recovery"]], ["snapshot.quarantined", "snapshot.restored_from_backup"])
+
+            audit = system.nucleus.audit(system.guardian, HUMAN, limit=4096, kinds={"route"})
+            self.assertTrue(any(r.get("verb") == "store.recovery" for r in audit))
+
+            clean = boot()  # a clean boot reports nothing
+            w2 = clean.nucleus._units[clean.services["watcher"]]
+            self.assertNotIn("store.recovery", [e.get("event") for e in w2.arena["events"]])
+
     def test_restart_respawns_units_from_preferred_code_version(self):
         from origin.core.bootstrap import boot, CODE_OBJECT
 
