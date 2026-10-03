@@ -80,6 +80,17 @@ def object_store_handler(ctx: UnitContext, msg: Message) -> None:
             store.prefer(msg.sender, payload["object_id"], payload["seq"], cap)
             ctx.respond(msg, "object.preferred", {"object_id": payload["object_id"], "seq": payload["seq"]})
 
+        elif verb == "object.reclaimable":
+            # Read-only preview of what object.compact would reclaim. With an
+            # object_id it reports that Object; without one, the whole store.
+            report = store.reclaimable_report(
+                msg.sender,
+                cap,
+                object_id=payload.get("object_id"),
+                keep_recent=int(payload.get("keep_recent", 3)),
+            )
+            ctx.respond(msg, "object.reclaimable", report)
+
         elif verb == "object.compact":
             result = store.compact(
                 msg.sender,

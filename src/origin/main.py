@@ -53,7 +53,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /status  /objects  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
+  Inspect freely:      /status  /objects  /reclaimable  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>   /spawn <kind> <name>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
@@ -228,6 +228,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/objects":
         _objects(system)
         return True
+    if parts[0].lower() == "/reclaimable":
+        _reclaimable(system, parts[1:])
+        return True
     if parts[0].lower() == "/names":
         _names(system)
         return True
@@ -356,6 +359,51 @@ def _repl(system: System) -> None:
     print(f"step {system.nucleus.current_step()}. Every action above is in the audit trail.")
 
 
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KiB"
+    return f"{n / (1024 * 1024):.1f} MiB"
+
+
+def _reclaimable(system: System, args: list[str]) -> None:
+    """Show what compaction could reclaim, per Object and store-wide.
+
+    Read-only: this never compacts anything. Usage: /reclaimable [keep_recent]
+    """
+    keep_recent = 3
+    if args:
+        try:
+            keep_recent = int(args[0])
+        except ValueError:
+            print("Usage: /reclaimable [keep_recent]   (keep_recent is a whole number, default 3)")
+            return
+    report = system.store.reclaimable_report(HUMAN, system.guardian, keep_recent=keep_recent)
+    totals = report["totals"]
+    print(f"Reclaimable history (keeping the {report['keep_recent']} most recent versions per Object)")
+    print(
+        f"  store-wide: {totals['reclaimable_versions']} of {totals['total_versions']} versions, "
+        f"{_fmt_bytes(totals['reclaimable_bytes'])} reclaimable "
+        f"({_fmt_bytes(totals['retained_bytes'])} stays), "
+        f"across {totals['objects_with_reclaimable']} of {totals['objects']} Objects"
+    )
+    for row in report["objects"]:
+        if not row["reclaimable_versions"]:
+            continue
+        prot = row["protected"]
+        print(
+            "  "
+            f"{mask(str(row['object_id'])):<20} {row['kind']:<10} "
+            f"reclaim {row['reclaimable_versions']:>3} of {row['total_versions']:>3}  "
+            f"{_fmt_bytes(row['reclaimable_bytes']):>9}  seqs {row['reclaimable_seqs']}  "
+            f"protected: pins {prot['pinned']} preferred {prot['preferred']}"
+        )
+    if not totals["reclaimable_versions"]:
+        print("  nothing to reclaim at this window.")
+    print("  This is a preview. Nothing was compacted; compaction stays an explicit request.")
+
+
 def _status(system: System) -> None:
     units = getattr(system.nucleus, "_units", {})
     objects = getattr(system.store, "_objects", {})
@@ -378,6 +426,11 @@ def _status(system: System) -> None:
     print(f"  durable versions: {durable_versions}")
     print(f"  compacted versions: {compacted_versions}")
     print(f"  pinned versions: {pinned_versions}")
+    totals = system.store.reclaimable_report(HUMAN, system.guardian)["totals"]
+    print(
+        f"  reclaimable history: {totals['reclaimable_versions']} versions, "
+        f"{_fmt_bytes(totals['reclaimable_bytes'])} (see /reclaimable)"
+    )
     print(f"  storage: {storage_path or 'memory'}")
     print(f"  temp snapshot: {'present' if temp_snapshot else 'clean'}")
     events = getattr(system.store, "recovery_events", [])

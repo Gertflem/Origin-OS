@@ -23,6 +23,12 @@ The core principles are simple:
 This repository is actively evolving toward a minimal agent OS runtime in Python,
 with a working package layout, CLI entrypoint, and versioned object persistence.
 
+- Phase 1 (pure simulation) is complete.
+- Phase 2 (persistent object substrate) is feature-complete through 2.8b: crash
+  recovery, backup and quarantine of damaged snapshots, history audits, restart
+  from durable state, safe compaction, and an operator report of reclaimable
+  history. Progress is tracked in `PHASE_1_CHECKLIST.md`.
+
 ## Quick start
 
 ```bash
@@ -46,6 +52,32 @@ py -m origin --demo
 
 ```bash
 py -m origin --status
+```
+
+## Persist state across runs
+
+```bash
+py -m origin --storage origin.json
+```
+
+## See what compaction could reclaim
+
+Compaction is a deliberate choice, so Origin shows what it would reclaim before
+anything is touched. In the interactive console:
+
+```text
+/reclaimable        # keep the 3 most recent versions per Object (default)
+/reclaimable 5      # keep the 5 most recent
+```
+
+The report is read-only. It lists reclaimable versions and bytes per Object and
+store-wide, and never offers pinned, preferred, recent, or already-compacted
+versions. `--status` also shows a one-line summary.
+
+## Run the tests
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ## Project structure
@@ -103,6 +135,11 @@ Origin/
     └── workflows/
         └── tests.yml
 ```
+
+Note on layout: the modules at the top level of `src/origin/` (`bootstrap.py`,
+`capability.py`, `constitution.py`, `ids.py`, `message.py`, `nucleus.py`,
+`objects.py`, `unit.py`) are thin compatibility re-exports. The implementations
+live in `src/origin/core/`.
 
 ## Why not just use [X]?
 

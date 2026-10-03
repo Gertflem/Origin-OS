@@ -1255,5 +1255,176 @@ class TestPackage(unittest.TestCase):
         self.assertIn("Origin Phase 1", result.stdout)
 
 
+class TestReclaimableReport(unittest.TestCase):
+    """Phase 2.8b: compaction is a visible, deliberate choice."""
+
+    def _store_with_history(self, versions: int = 7):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        store = ObjectStore(lambda *a: None)
+        cap = Capability("cap-reclaim")
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for i in range(1, versions):
+            store.append("alice", obj.object_id, {"t": i}, cap, step=i + 1)
+        return store, cap, obj.object_id
+
+    def test_report_predicts_exactly_what_compact_reclaims(self):
+        store, cap, oid = self._store_with_history()
+        store.pin("alice", oid, 2, cap)
+        store.prefer("alice", oid, 1, cap)
+
+        report = store.reclaimable_report("alice", cap, object_id=oid, keep_recent=2)
+        result = store.compact("alice", oid, cap, keep_recent=2)
+
+        self.assertEqual(report["reclaimable_seqs"], result["reclaimed"])
+        self.assertEqual(report["reclaimable_versions"], len(result["reclaimed"]))
+        # Pinned (2), preferred (1) and the two newest (5, 6) are protected.
+        self.assertEqual(report["reclaimable_seqs"], [0, 3, 4])
+        self.assertEqual(report["protected"]["pinned"], [2])
+        self.assertEqual(report["protected"]["preferred"], 1)
+        self.assertEqual(report["protected"]["recent"], [5, 6])
+        self.assertEqual(report["keep_recent"], 2)
+        self.assertGreater(report["reclaimable_bytes"], 0)
+
+    def test_report_is_read_only(self):
+        store, cap, oid = self._store_with_history()
+        before = store.history("alice", oid, cap)
+
+        store.reclaimable_report("alice", cap, object_id=oid)
+        store.reclaimable_report("alice", cap)
+
+        self.assertEqual(store.history("alice", oid, cap), before)
+        self.assertEqual(store.retention_summary("alice", oid, cap)["compacted"], 0)
+
+    def test_already_compacted_versions_are_not_reported_again(self):
+        store, cap, oid = self._store_with_history()
+        first = store.compact("alice", oid, cap, keep_recent=2)
+
+        report = store.reclaimable_report("alice", cap, object_id=oid, keep_recent=2)
+
+        # Compaction appends a marker version, which moves the recent window
+        # forward by one, so a second pass may legitimately find one more. What
+        # it must never do is offer something that was already reclaimed.
+        self.assertFalse(set(report["reclaimable_seqs"]) & set(first["reclaimed"]))
+        self.assertEqual(report["protected"]["already_compacted"], sorted(store._objects[oid].compacted))
+        second = store.compact("alice", oid, cap, keep_recent=2)
+        self.assertEqual(report["reclaimable_seqs"], second["reclaimed"])
+
+    def test_keep_recent_is_floored_at_one_like_compact(self):
+        store, cap, oid = self._store_with_history(versions=4)
+
+        report = store.reclaimable_report("alice", cap, object_id=oid, keep_recent=0)
+
+        self.assertEqual(report["keep_recent"], 1)
+        self.assertNotIn(3, report["reclaimable_seqs"])  # the newest is never offered
+
+    def test_store_wide_report_totals(self):
+        store, cap, big = self._store_with_history(versions=8)
+        small = store.create("alice", "note", {"x": 1}, cap, step=1).object_id
+
+        report = store.reclaimable_report("alice", cap, keep_recent=3)
+        totals = report["totals"]
+
+        self.assertEqual(totals["objects"], 2)
+        self.assertEqual(totals["objects_with_reclaimable"], 1)
+        self.assertEqual(totals["reclaimable_versions"], 5)
+        self.assertEqual(totals["total_versions"], 9)
+        self.assertEqual(totals["reclaimable_bytes"], sum(r["reclaimable_bytes"] for r in report["objects"]))
+        # Largest reclaimable object is listed first.
+        self.assertEqual(report["objects"][0]["object_id"], big)
+        self.assertEqual(next(r for r in report["objects"] if r["object_id"] == small)["reclaimable_versions"], 0)
+
+    def test_report_requires_audit_authority(self):
+        from origin.core.capability import Capability, Right
+        from origin.core.objects import ObjectStore
+
+        def validator(cap, right, target, holder):
+            if right is Right.AUDIT:
+                raise PermissionError("no audit")
+
+        store = ObjectStore(validator)
+        cap = Capability("cap-no-audit")
+        oid = store.create("alice", "journal", {"t": 0}, cap, step=1).object_id
+
+        with self.assertRaises(PermissionError):
+            store.reclaimable_report("alice", cap, object_id=oid)
+        with self.assertRaises(PermissionError):
+            store.reclaimable_report("alice", cap)
+        with self.assertRaises(PermissionError):
+            store.reclaimable_report("alice", None)
+
+    def test_unknown_object_is_indistinguishable_miss(self):
+        from origin.core.objects import ObjectNotFound
+
+        store, cap, _ = self._store_with_history()
+        with self.assertRaises(ObjectNotFound):
+            store.reclaimable_report("alice", cap, object_id="obj-missing")
+
+    def test_enumerate_now_exposes_compacted_seqs(self):
+        store, cap, oid = self._store_with_history()
+        store.compact("alice", oid, cap, keep_recent=2)
+
+        row = next(r for r in store.enumerate("alice", cap) if r["object_id"] == oid)
+
+        self.assertEqual(row["compacted"], sorted(store._objects[oid].compacted))
+        self.assertTrue(row["compacted"])
+
+    def test_object_store_unit_answers_reclaimable_verb(self):
+        from types import SimpleNamespace
+
+        from origin.units.object_store import object_store_handler
+
+        store, cap, oid = self._store_with_history()
+        replies = []
+        ctx = SimpleNamespace(
+            mem={"store": store},
+            step=1,
+            respond=lambda msg, verb, payload: replies.append((verb, payload)),
+        )
+        msg = SimpleNamespace(
+            sender="alice", verb="object.reclaimable", payload={"object_id": oid, "keep_recent": 2}, caps=(cap,)
+        )
+
+        object_store_handler(ctx, msg)
+
+        self.assertEqual(replies[0][0], "object.reclaimable")
+        self.assertEqual(replies[0][1]["reclaimable_seqs"], [0, 1, 2, 3, 4])
+
+        replies.clear()
+        object_store_handler(ctx, SimpleNamespace(sender="alice", verb="object.reclaimable", payload={}, caps=(cap,)))
+        self.assertIn("totals", replies[0][1])
+
+    def test_reclaimable_command_and_status_line(self):
+        from origin.core.ids import HUMAN
+        from origin.main import _handle, boot
+
+        system = boot()
+        oid = system.store.create(
+            HUMAN, "journal", {"t": 0}, system.guardian, step=1
+        ).object_id
+        for i in range(1, 8):
+            system.store.append(HUMAN, oid, {"t": i}, system.guardian, step=i + 1)
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertTrue(_handle(system, "/reclaimable 2"))
+        output = buffer.getvalue()
+        self.assertIn("Reclaimable history", output)
+        self.assertIn("keeping the 2 most recent", output)
+        self.assertIn("Nothing was compacted", output)
+        self.assertEqual(system.store.retention_summary(HUMAN, oid, system.guardian)["compacted"], 0)
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/status")
+        self.assertIn("reclaimable history:", buffer.getvalue())
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/reclaimable nonsense")
+        self.assertIn("Usage: /reclaimable", buffer.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
