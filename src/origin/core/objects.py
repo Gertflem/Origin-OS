@@ -21,11 +21,12 @@ without a relevant Capability is impossible, and object ids are 128-bit secrets,
 so the only way to reach an Object is to already hold a token naming it. The
 absence of an enumeration method is not an omission; it is the invariant.
 
-Phase 1 note: this is a pure simulation, so "durable" means acknowledged and
-committed to the store for the lifetime of the process. Surviving process death
-is Phase 2 (Persistent Object Substrate). The `acked` flag below is the seam
-where a real write-ahead log will attach, and nothing in this module assumes the
-backing store is memory.
+Durability note: "durable" here means the version survives process death, not
+just the current process. When a `storage_path` is configured every mutation is
+written through a temp file and an atomic rename, with the previous good snapshot
+kept as a `.bak` and damaged files quarantined rather than deleted. The `acked`
+flag below is the seam where a real write-ahead log will attach, and nothing in
+this module assumes the backing store is memory.
 """
 
 from __future__ import annotations
@@ -162,6 +163,79 @@ Validator = Callable[[Capability, Right, Optional[str], str], Any]
 def _json_default(value: Any) -> Any:
     if isinstance(value, set):
         return sorted(value)
+
+
+# --- Durable rename -----------------------------------------------------------
+#
+# `os.replace` is atomic, but atomic is not the same as durable. The rename that
+# points the main snapshot at the freshly written temp file lives in the *parent
+# directory's* metadata, and until that directory entry is flushed the rename can
+# still be lost on power failure — leaving a file whose contents were fsynced but
+# which was never actually linked into place.
+#
+# POSIX: open the directory and fsync it.
+# Windows: refuses to open a directory as a file handle at all (it raises
+#   PermissionError), so we go through CreateFileW with
+#   FILE_FLAG_BACKUP_SEMANTICS and FlushFileBuffers. Skipping this step used to
+#   look harmless because the failure was caught and ignored, but it silently
+#   downgraded the durability guarantee on the platform the project actually runs
+#   on. A missing directory flush is now reported, never swallowed.
+
+
+def _flush_directory_windows(path: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+
+    # FlushFileBuffers needs GENERIC_WRITE, which is why this cannot be a plain read handle.
+    handle = create_file(
+        str(path),
+        GENERIC_WRITE,
+        FILE_SHARE_ALL,
+        None,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if handle == INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    try:
+        if not kernel32.FlushFileBuffers(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _flush_directory(path: Path) -> None:
+    """Flush a directory entry so a rename into it survives power loss."""
+    if os.name == "nt":
+        _flush_directory_windows(path)
+        return
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     if hasattr(value, "__dict__"):
         return value.__dict__
     return str(value)
@@ -212,6 +286,71 @@ class ObjectStore:
             for object_id, obj in self._objects.items()
         }
 
+    def sweep(self, holder: str, cap: Optional[Capability], *, keep_recent: int = 3,
+              min_versions: int = 32, dry_run: bool = True) -> dict:
+        """Compact every Object whose history has outgrown its retention window.
+
+        Section 3 describes tiered retention as a *policy*: recent versions at
+        full fidelity, pins never removed, older history semantically compacted.
+        Until now only the operator could apply it, by asking about one Object at
+        a time, so in practice history grew until a human decided to intervene.
+        This is that policy running on its own.
+
+        Deliberately conservative, because automatic reclamation of durable memory
+        is the kind of thing that should be hard to trigger accidentally:
+
+        - `min_versions` (default 32) means an Object is left alone until its
+          history is genuinely long. Short histories are usually more valuable
+          whole, and compacting them saves nothing.
+        - `dry_run` (default True) means nothing is touched until asked.
+        - Selection is `_reclaimable_seqs`, the same function `compact` acts on and
+          `reclaimable_report` previews, so this cannot disagree with either.
+          Pinned, preferred, recent and already-compacted versions are untouchable.
+
+        Compaction remains tiered rather than deletion: every reclaimed version
+        keeps its seq, author, step and note forever, and the sweep appends a
+        marker version naming exactly what it reclaimed (invariant 7).
+        """
+        self._check(cap, Right.PIN, None, holder)
+
+        candidates: list[dict] = []
+        for obj in self._objects.values():
+            if len(obj.versions) < int(min_versions):
+                continue
+            seqs = self._reclaimable_seqs(obj, keep_recent)
+            if seqs:
+                candidates.append(
+                    {
+                        "object_id": obj.object_id,
+                        "kind": obj.kind,
+                        "versions": len(obj.versions),
+                        "reclaimable": seqs,
+                        "reclaimable_bytes": sum(
+                            self._payload_bytes(v) for v in obj.versions if v.seq in set(seqs)
+                        ),
+                    }
+                )
+
+        candidates.sort(key=lambda row: -row["reclaimable_bytes"])
+        result = {
+            "keep_recent": keep_recent,
+            "min_versions": int(min_versions),
+            "dry_run": bool(dry_run),
+            "candidates": candidates,
+            "objects_swept": 0,
+            "versions_reclaimed": 0,
+            "bytes_reclaimed": 0,
+        }
+        if dry_run or not candidates:
+            return result
+
+        for row in candidates:
+            self.compact(holder, row["object_id"], cap, keep_recent=keep_recent)
+            result["objects_swept"] += 1
+            result["versions_reclaimed"] += len(row["reclaimable"])
+            result["bytes_reclaimed"] += row["reclaimable_bytes"]
+        return result
+
     def _persist(self) -> None:
         if self._storage_path is None:
             return
@@ -225,13 +364,16 @@ class ObjectStore:
             shutil.copy2(self._storage_path, self._backup_path())
         os.replace(tmp_path, self._storage_path)
         try:
-            dir_fd = os.open(str(self._storage_path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except (AttributeError, OSError, NotImplementedError):
-            pass
+            _flush_directory(self._storage_path.parent)
+        except (AttributeError, OSError, NotImplementedError) as exc:
+            # The rename is atomic but only becomes durable once the parent
+            # directory entry is flushed. If that fails the acknowledged version
+            # is still intact in the file itself, so this is a weakened guarantee
+            # rather than data loss -- but it must be visible to the operator
+            # instead of vanishing into an ignored exception.
+            self.recovery_events.append(
+                {"kind": "durability.degraded", "reason": "directory_flush_failed", "detail": str(exc)}
+            )
 
     def _backup_path(self) -> Path:
         return self._storage_path.with_suffix(f"{self._storage_path.suffix}.bak")

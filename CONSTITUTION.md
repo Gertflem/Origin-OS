@@ -1,4 +1,4 @@
-# CONTINUUM — A First-Principles Operating System
+# Origin — A First-Principles Operating System
 
 ## Design Constitution · Complete Roadmap · Working Agreement
 
@@ -7,6 +7,15 @@ It contains the locked Constitution, the full development roadmap, and the
 agreement for how we will build it together.
 
 Version 1.0 — October 2026
+
+> **On the name.** This project was called CONTINUUM in earlier drafts. Origin is
+> the current name, everywhere. The rules below are unchanged by the rename; only
+> the project's name moved.
+
+**Where things live.** The rules and phase roadmap are here. What is actually
+built is tracked in `PROGRESS.md`; the summary label the CLI displays lives in
+`origin/__init__.py` as `__phase__`. If those three ever disagree, this document
+wins on the rules and `PROGRESS.md` wins on the facts.
 
 ---
 
@@ -125,12 +134,11 @@ Inside each phase we work in very small steps.
 We resolved the major open questions, locked the Constitution, and defined how
 we will work together. This phase is finished.
 
-**Phase 1 — Pure Simulation (CURRENT)**
+**Phase 1 — Pure Simulation (COMPLETED)**
 Build a pure software simulation that obeys the Constitution. Goal: prove the
-model feels right and catch design issues early. We will implement this together
-in small steps.
+model feels right and catch design issues early.
 
-Phase 1 sub-steps:
+Phase 1 sub-steps (all complete — see `PROGRESS.md`):
 
 - 1.1 Project structure + Constitution file
 - 1.2 Capability (unforgeable token)
@@ -143,14 +151,17 @@ Phase 1 sub-steps:
 - 1.9 Basic Naming support
 - 1.10 Simple demo Units + first Improver experiments
 
-**Phase 2 — Persistent Object Substrate**
-Real durability, better compaction policies, crash recovery testing, and
-stronger guarantees that acknowledged versions survive process death.
+**Phase 2 — Persistent Object Substrate (COMPLETED)**
+Real durability, compaction and retention policy, crash recovery testing, and
+guarantees that acknowledged versions survive process death. Complete through
+2.9; see `PROGRESS.md` for the itemised record.
 
-**Phase 3 — Minimal Interactive System**
+**Phase 3 — Minimal Interactive System (CURRENT)**
 Polish the Console, add reliable naming and intent resolution, support
 birthing/killing Units and granting Capabilities fluidly, and demonstrate
-complete intent → execution loops.
+complete intent → execution loops. The intent loop already works end to end for
+the verbs implemented so far; what remains is making it the primary path,
+building the Studio, and completing section 3's tiering policy.
 
 **Phase 4 — Capability & Security Hardening**
 Full token lifecycle, revocation, auditing, threat modeling, and making
@@ -188,10 +199,13 @@ This is the working agreement so we stay aligned.
 
 ## Tools
 
-You can use Visual Studio, Visual Studio Code, or any Python environment you
-like. We will use Python 3 for Phase 1 because it is clear, fast to write, and
-easy to inspect. Later phases may introduce other languages when we move closer
-to the metal.
+Use any editor and Python environment you like. Python 3, because it is clear,
+fast to write, and easy to inspect. Later phases may introduce other languages
+when we move closer to the metal.
+
+On Windows, run the suite with `py -m unittest discover -s tests`. The `python`
+alias is often shadowed by the Microsoft Store shim, and tests that spawn a
+subprocess need `src` on `PYTHONPATH`.
 
 ## Pace
 
@@ -199,10 +213,11 @@ We move at a human pace. It is better to understand each piece deeply than to
 rush. You can always ask me to explain anything again or to break a step into
 even smaller pieces.
 
-## Starting Point
+## Where we are
 
-We will restart Phase 1 cleanly from the first step. I will begin by giving you
-the very first action: creating the project folder and the first file.
+Phases 0, 1 and 2 are complete. The project is in Phase 3 (Minimal Interactive
+System). `PROGRESS.md` lists what is done and what is next; this document is
+unchanged by that progress and remains the contract it is measured against.
 
 *This document is complete. Save it. We will refer back to it often.*
 

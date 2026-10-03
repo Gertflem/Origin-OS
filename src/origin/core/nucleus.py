@@ -38,7 +38,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
-from . import constitution
+from . import constitution, core_verbs
 from .capability import (
     Capability,
     CapabilityError,
@@ -47,24 +47,16 @@ from .capability import (
     RESERVED_RIGHTS,
     Right,
 )
+from .core_verbs import CORE_VERBS
 from .ids import HUMAN, NUCLEUS, new_id
 from .message import Message
 from .unit import MAX_SYSCALLS_PER_INVOCATION, UNIT_TYPES, Preempted, Unit, UnitContext, UnitState
 
-#: Verbs the Nucleus will accept when addressed directly. A closed vocabulary:
-#: each maps to one enumerated core power and nothing else can be requested.
+#: The closed vocabulary of verbs the core answers is declared once, in
+#: `core.core_verbs`, and imported above. It is derived from the dispatch table
+#: rather than listed beside it, so a verb can never be reachable without also
+#: being declared, and the declaration cannot go stale.
 #:
-#: `inspect` deserves a word, because at a glance it looks like a power the
-#: Constitution did not grant. It is not one. The audit trail, the Unit table and
-#: the Capability registry are core state; nothing outside the core can report on
-#: them, and section 8 requires that the human can always inspect Units,
-#: Capabilities and Messages. So the core serves read-only descriptions of its
-#: own bookkeeping to any principal presenting an AUDIT token. It cannot mutate,
-#: it cannot be called without authority, and refusing it would break a
-#: constitutional promise. It is filed under validate_capability because that is
-#: what it does: report on authority.
-CORE_VERBS = frozenset({"spawn", "kill", "freeze", "mint", "revoke", "inspect"})
-
 #: Verbs the Nucleus may originate on its own. Also closed, and disjoint from
 #: everything a Unit might ask for — the core cannot impersonate a service.
 CORE_SIGNALS = frozenset({"interrupt", "unit.contained", "unit.killed", "nucleus.sealed"})
@@ -562,48 +554,24 @@ class Nucleus:
             )
 
     def _execute_core_verb(self, msg: Message) -> dict:
-        p = msg.payload or {}
-        cap = msg.caps[0] if msg.caps else None
-        if msg.verb == "spawn":
-            unit = self.spawn(
-                msg.sender,
-                p.get("kind", "unit"),
-                p["name"],
-                p["entry"],
-                params=p.get("params"),
-                code_object_id=p.get("code_object_id"),
-                code_seq=p.get("code_seq"),
-                authority=cap,
-                endow=p.get("endow", ()),
-                replaces=p.get("replaces"),
-            )
-            return {"unit_id": unit.unit_id, "name": unit.name}
-        if msg.verb == "kill":
-            self.kill(p["unit_id"], by=msg.sender, reason=p.get("reason", ""), authority=cap)
-            return {"killed": p["unit_id"]}
-        if msg.verb == "freeze":
-            self.freeze(p["unit_id"], by=msg.sender, reason=p.get("reason", ""), authority=cap)
-            return {"frozen": p["unit_id"]}
-        if msg.verb == "mint":
-            new = self.mint(
-                [Right(r) for r in p["rights"]],
-                p.get("target"),
-                msg.sender,
-                p["holder"],
-                expires_in=p.get("expires_in"),
-                label=p.get("label", ""),
-                authority=cap,
-            )
-            return {"cap": str(new), "cap_id": new.cap_id}
-        if msg.verb == "revoke":
-            self.revoke(Capability(p["cap_id"]), by=msg.sender, reason=p.get("reason", ""), authority=cap)
-            return {"revoked": p["cap_id"]}
-        if msg.verb == "inspect":
-            return self._inspect(msg.sender, cap, p)
-        raise CapabilityError(f"unhandled core verb {msg.verb!r}")
+        """Answer a core request by delegating to the verb table.
 
-    def _inspect(self, requester: str, cap: Optional[Capability], p: dict) -> dict:
-        """Read-only transparency over core bookkeeping. AUDIT-gated."""
+        The dispatch lives in `core.core_verbs`, not here. Section 2 says the
+        Nucleus stays tiny, and a branching table inside this class is precisely
+        how an application layer starts growing in the privileged core. This
+        method keeps one job: hand the request to the table and return its answer.
+        """
+        return core_verbs.dispatch(self, msg)
+
+    def describe(self, requester: str, cap: Optional[Capability], p: dict) -> dict:
+        """Read-only transparency over core bookkeeping. AUDIT-gated.
+
+        Called by the `inspect` verb in `core.core_verbs`. Why this is not an
+        extra power: the audit trail, Unit table and Capability registry are core
+        state, nothing outside the core can report on them, and section 8 requires
+        the human to always be able to inspect Units, Capabilities and Messages.
+        It cannot mutate and cannot be called without an AUDIT token.
+        """
         if cap is None:
             raise CapabilityError(f"{requester} requested inspection without an AUDIT Capability")
         self.validate(cap, Right.AUDIT, None, requester)
@@ -928,7 +896,11 @@ class Nucleus:
     #: return anything, and `drain_output` only empties the human's own outbox.
     #: They are listed separately so the tiny-core check does not mistake
     #: transparency for authority.
-    INSPECTION = frozenset({"snapshot", "audit", "drain_output", "find_unit"})
+    #:
+    #: `describe` is here for the same reason `inspect` is an allowed verb: the
+    #: Unit table, Capability registry and audit trail are core state that nothing
+    #: else can report on, and section 8 requires the human to inspect them.
+    INSPECTION = frozenset({"snapshot", "audit", "drain_output", "find_unit", "describe"})
 
     def audit_powers(self) -> dict:
         """Report whether the core's public surface still fits the Constitution.

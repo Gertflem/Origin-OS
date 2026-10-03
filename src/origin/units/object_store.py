@@ -5,12 +5,16 @@ service is an ordinary Unit. So this is not a subsystem the Nucleus knows about:
 it is a Unit whose arena happens to contain an `ObjectStore`, answering Messages
 and refusing anyone who arrives without the right Capability.
 
-Phase 1 caveat worth stating: the store instance lives in this Unit's private
-arena. Killing the Unit therefore destroys every Object, which is a real single
-point of failure. Phase 2 (Persistent Object Substrate) moves the store onto a
-durable layer *below* the Unit, so the service can be replaced without the data
-going with it. Until then the Watcher treats this Unit as precious and the
+The store's authoritative copy lives in this Unit's private arena, which is what
+keeps the Nucleus ignorant of storage. Killing the Unit mid-run therefore still
+discards in-memory state, so the Watcher treats this Unit as precious and the
 Improver is not allowed to propose changes to it.
+
+The durability Phase 2 added lives *below* the Unit, not inside it: with
+`boot(storage_path=...)` the snapshot is written through a temp file and an atomic
+rename on every mutation, so a restart rebuilds every Object from disk. Replacing
+this Unit without a configured storage path would lose data -- that single point
+of failure is real, and it is why this Unit is protected.
 """
 
 from __future__ import annotations
@@ -90,6 +94,20 @@ def object_store_handler(ctx: UnitContext, msg: Message) -> None:
                 keep_recent=int(payload.get("keep_recent", 3)),
             )
             ctx.respond(msg, "object.reclaimable", report)
+
+        elif verb == "object.sweep":
+            # Automatic retention. Section 3 states tiering as a policy, and a
+            # policy nobody applies is just a comment -- so it runs here. Dry run
+            # by default: automatic reclamation of durable memory has to be asked
+            # for, not stumbled into.
+            report = store.sweep(
+                msg.sender,
+                cap,
+                keep_recent=int(payload.get("keep_recent", 3)),
+                min_versions=int(payload.get("min_versions", 32)),
+                dry_run=bool(payload.get("apply", False)),
+            )
+            ctx.respond(msg, "object.swept", report)
 
         elif verb == "object.compact":
             result = store.compact(

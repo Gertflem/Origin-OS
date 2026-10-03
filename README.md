@@ -1,33 +1,47 @@
 # Origin
 
-Origin is a capability-based operating system simulation for autonomous AI agents.
-It is not a normal app with an AI feature bolted on. It is a small runtime where
-agents live as first-class system actors: they send Messages, hold Capabilities,
-read and write persistent Objects, and operate under explicit authority rather than
-ambient power.
+A capability-based operating system for autonomous AI agents, simulated in pure Python.
+
+Not an app with an AI feature bolted on. A small runtime where agents live as
+first-class system actors: they send Messages, hold Capabilities, read and write
+persistent Objects, and operate under explicit authority rather than ambient power.
 
 ## Why this project exists
 
-The goal is to create a safe operating environment for agentic software.
-The core principles are simple:
+To build a safe operating environment for agentic software:
 
 - no ambient authority
-- explicit capability grants
+- explicit, scoped, expiring capability grants
 - message-driven coordination
 - durable, versioned object memory
 - human oversight and auditability
 - recovery and self-healing by design
 
+`VISION.md` argues why an AI-native OS should not be organized around "run
+programs" and "save files". `CONSTITUTION.md` is the rulebook.
+`ARCHITECTURE.md` maps those rules onto the actual modules.
+
 ## Project status
 
-This repository is actively evolving toward a minimal agent OS runtime in Python,
-with a working package layout, CLI entrypoint, and versioned object persistence.
+Phases 0–2 are complete. `PROGRESS.md` is the itemised record; the phase label the
+CLI prints lives in `origin/__init__.py` as `__phase__`.
 
-- Phase 1 (pure simulation) is complete.
-- Phase 2 (persistent object substrate) is feature-complete through 2.8b: crash
-  recovery, backup and quarantine of damaged snapshots, history audits, restart
-  from durable state, safe compaction, and an operator report of reclaimable
-  history. Progress is tracked in `PHASE_1_CHECKLIST.md`.
+| Phase | State |
+|---|---|
+| 0 — Design stabilization | complete |
+| 1 — Pure simulation | complete (1.1–1.10) |
+| 2 — Persistent object substrate | complete (2.1–2.9) |
+| 3 — Minimal interactive system | current |
+
+The intent loop works end to end: a plain-language request becomes a scoped
+Capability proposal, the human confirms, and the Unit appends a new version.
+
+| Phase | State |
+|---|---|
+| 0 — Design stabilization | complete |
+| 1 — Pure simulation | complete (1.1–1.10) |
+| 2 — Persistent object substrate | complete (2.1–2.10) |
+| 3 — Minimal interactive system | current |
 
 ## Quick start
 
@@ -36,34 +50,53 @@ py -m pip install -e .
 py -m origin --help
 ```
 
-## Run the interactive console
+Run the interactive console:
 
 ```bash
 py -m origin
 ```
 
-## Run the scripted demo
+Run the scripted tour:
 
 ```bash
 py -m origin --demo
 ```
 
-## Run a system status check
+Print a runtime summary without entering the REPL:
 
 ```bash
 py -m origin --status
 ```
 
-## Persist state across runs
+Persist state across runs:
 
 ```bash
 py -m origin --storage origin.json
 ```
 
+## Try the intent loop
+
+Type an ordinary sentence. The system resolves it, tells you exactly which
+authority the action requires, and waits for you to confirm.
+
+```text
+you> brighten the beach photo by 20
+PROPOSED: brighten the beach photo by 20
+  authority cost:
+    - READ+APPEND on the beach photo, granted to the photo Unit, expires in 24 steps
+  type 'confirm' to proceed or 'cancel' to drop it.
+you> confirm
+RESULT:
+  brighten: seq 0 -> 1 (brightened by 20)
+```
+
+Nothing happens without the Capability. `confirm` mints exactly the token that
+was quoted, scoped to one Object, with an expiry.
+
 ## See what compaction could reclaim
 
 Compaction is a deliberate choice, so Origin shows what it would reclaim before
-anything is touched. In the interactive console:
+anything is touched:
 
 ```text
 /reclaimable        # keep the 3 most recent versions per Object (default)
@@ -74,98 +107,76 @@ The report is read-only. It lists reclaimable versions and bytes per Object and
 store-wide, and never offers pinned, preferred, recent, or already-compacted
 versions. `--status` also shows a one-line summary.
 
+## Run the retention policy
+
+`/reclaimable` answers "what *could* be reclaimed". `/sweep` applies section 3's
+tiering across the whole store, and previews until you say otherwise:
+
+```text
+/sweep                # preview: keeping 3 recent per Object, skipping Objects under 32 versions
+/sweep 5 16           # preview with a different window and floor
+/sweep 3 8 apply      # actually compact
+```
+
+Compaction is tiered, never deletion: a reclaimed version keeps its seq, author,
+step and note forever, and the sweep appends a marker version naming exactly what
+it reclaimed. Pinned and preferred versions are never reclaimed.
+
 ## Run the tests
 
 ```bash
-python -m unittest discover -s tests -v
+py -m unittest discover -s tests
 ```
+
+On Windows use `py`, not `python` — the `python` alias is often shadowed by the
+Microsoft Store shim.
 
 ## Project structure
 
 ```text
 Origin/
-├── AGENT_OS_VISION.md
-├── ARCHITECTURE.md
-├── CONSTITUTION.md
-├── README.md
+├── ARCHITECTURE.md      how the rules map onto the modules
+├── CONSTITUTION.md      the rules and the phase roadmap (source of truth)
+├── CONTRIBUTING.md      how to work on this codebase
+├── PROGRESS.md          what is built and verified
+├── VISION.md            why an OS for agents looks like this
 ├── pyproject.toml
-├── src/
-│   └── origin/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── bootstrap.py
-│       ├── capability.py
-│       ├── cli.py
-│       ├── constitution.py
-│       ├── core/
-│       │   ├── __init__.py
-│       │   ├── bootstrap.py
-│       │   ├── capability.py
-│       │   ├── constitution.py
-│       │   ├── ids.py
-│       │   ├── message.py
-│       │   ├── nucleus.py
-│       │   ├── objects.py
-│       │   └── unit.py
-│       ├── human/
-│       │   └── __init__.py
-│       ├── kernel/
-│       │   └── __init__.py
-│       ├── main.py
-│       ├── message.py
-│       ├── messages/
-│       │   └── __init__.py
-│       ├── objects/
-│       │   └── __init__.py
-│       ├── services/
-│       │   └── __init__.py
-│       ├── simulator/
-│       │   └── __init__.py
-│       └── units/
-│           ├── __init__.py
-│           ├── console.py
-│           ├── demo.py
-│           ├── improver.py
-│           ├── naming.py
-│           ├── object_store.py
-│           └── watcher.py
+├── src/origin/
+│   ├── __main__.py      module entrypoint
+│   ├── main.py          CLI, REPL, scripted demo
+│   ├── core/            the privileged layer
+│   │   ├── capability.py    unforgeable authority tokens
+│   │   ├── ids.py           principal and object id helpers
+│   │   ├── message.py       the only communication channel
+│   │   ├── objects.py       persistent append-only versioned Objects
+│   │   ├── unit.py          isolated execution actors
+│   │   ├── nucleus.py       the tiny privileged core
+│   │   ├── constitution.py  machine-checkable restatement of the rules
+│   │   └── bootstrap.py     birth the boot Units, then seal
+│   └── units/           ordinary Units — the majority of the system
+│       ├── agent.py         agent lifecycle template
+│       ├── console.py       human control surface
+│       ├── demo.py          demo worker Units
+│       ├── improver.py      diagnoses failures, proposes versions
+│       ├── naming.py        names, intent resolution
+│       ├── object_store.py  persistent storage as a service
+│       └── watcher.py       detects invariant violations
 ├── tests/
 │   └── test_package.py
-└── .github/
-    └── workflows/
-        └── tests.yml
+└── .github/workflows/tests.yml
 ```
 
-Note on layout: the modules at the top level of `src/origin/` (`bootstrap.py`,
-`capability.py`, `constitution.py`, `ids.py`, `message.py`, `nucleus.py`,
-`objects.py`, `unit.py`) are thin compatibility re-exports. The implementations
-live in `src/origin/core/`.
+The modules at the top level of `src/origin/` (`bootstrap.py`, `capability.py`,
+`constitution.py`, `ids.py`, `message.py`, `nucleus.py`, `objects.py`, `unit.py`,
+`cli.py`) are thin compatibility re-exports. The implementations live in
+`core/`.
 
 ## Why not just use [X]?
 
-Origin is the reference design — the readable, runnable, constitutionally-grounded model. Other projects implement pieces of this; nobody has written the whole picture down as a coherent whole.
-
-## Development philosophy
-
-Origin follows a constitution-first approach:
-
-- the Nucleus stays small and privileged
-- authority exists only as explicit Capabilities
-- objects are append-only and versioned
-- units communicate through Messages
-- humans retain oversight through audit and revocation
-
-That makes it a runtime for safe agent behavior rather than a conventional AI application.
-
-## Roadmap
-
-The project is currently moving through the constitutional phases:
-
-- Phase 1: pure simulation and foundational model
-- Phase 2: durable object substrate and persistence
-- Phase 3: minimal interactive system and richer user-facing workflows
-- later phases: stronger security, naming, and agent lifecycle management
+Origin is the reference design — the readable, runnable,
+constitutionally-grounded model. Other projects implement pieces of this; nobody
+has written the whole picture down as a coherent whole.
 
 ## License
 
-This project is under active development. It does not yet carry a final public license decision.
+See [LICENSE](LICENSE).

@@ -3,8 +3,8 @@
 Section 8 promises the human can always see what the system is doing. Section 6
 promises that an intent becomes an action only by going through express ->
 resolve -> propose capabilities -> confirm -> execute -> inspectable result.
-This Unit is where both promises are kept, and it is the only place in Phase 1
-where a human typing a sentence turns into Messages on the wire.
+This Unit is where both promises are kept, and it is the only place where a human
+typing a sentence turns into Messages on the wire.
 
 **It is deliberately not privileged.** Five standing tokens: SEND so it can talk
 at all, RESOLVE and BIND so it can work with names, AUDIT so it can answer
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from .. import __phase__
 from ..capability import RESERVED_RIGHTS, Capability, Right
 from ..ids import HUMAN, NUCLEUS, mask
 from ..message import Message
@@ -44,7 +45,7 @@ from .improver import PROTECTED_KINDS
 CONFIRM = frozenset({"y", "yes", "confirm", "ok", "okay", "go", "do it", "sure"})
 CANCEL = frozenset({"n", "no", "cancel", "stop", "abort", "never mind", "nevermind"})
 
-HELP = """Origin — Phase 1 console. Say what you want, or use a command.
+HELP = f"""Origin — {__phase__}. Say what you want, or use a command.
 
   intents (plain language, resolved by the Naming Unit)
     brighten the beach photo by 20
@@ -66,6 +67,9 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
     /powers            the Nucleus's own account of its powers
+    /reclaimable [n]   what compaction could reclaim, per Object and store-wide
+    /sweep [k] [m] [apply]
+                       run the retention policy store-wide (preview without apply)
 
   actions (proposed first, executed only on 'confirm')
     /focus [name]      show or set what "this" and "it" refer to

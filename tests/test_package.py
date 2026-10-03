@@ -13,6 +13,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from origin import __phase__  # noqa: E402
+
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 
 class TestPackage(unittest.TestCase):
     def test_package_imports(self):
@@ -175,8 +180,6 @@ class TestPackage(unittest.TestCase):
                     if point == "during_tmp_write":
                         # tmp left half-written
                         raise Crash()
-                    if point == "after_replace" and calls["fsync"] >= 2:
-                        raise Crash()
                     return real_fsync(fd)
 
                 def copy(*a, **k):
@@ -189,8 +192,20 @@ class TestPackage(unittest.TestCase):
                         raise Crash()
                     return real_replace(*a, **k)
 
+                def flush_dir(*a, **k):
+                    # "after_replace" is the window between the atomic rename and
+                    # the directory flush that makes it durable. Injecting here by
+                    # patching the flush seam keeps the test portable: counting
+                    # fsync calls only works on POSIX, where the directory flush is
+                    # an fsync, and silently skipped the case on Windows.
+                    if point == "after_replace":
+                        raise Crash()
+                    return real_flush_dir(*a, **k)
+
+                real_flush_dir = objmod._flush_directory
                 with patch.object(objmod.os, "fsync", fsync), patch.object(objmod.shutil, "copy2", copy), \
-                        patch.object(objmod.os, "replace", replace):
+                        patch.object(objmod.os, "replace", replace), \
+                        patch.object(objmod, "_flush_directory", flush_dir):
                     with self.assertRaises(Crash):  # the injected crash must really fire
                         store.append("alice", obj.object_id, {"t": 2}, cap, step=3)
                 reopened = ObjectStore(validator, storage_path=path)
@@ -207,6 +222,156 @@ class TestPackage(unittest.TestCase):
                 self.assertIn(latest, ({"t": 1}, {"t": 2}))
                 if point == "after_replace":
                     self.assertEqual(latest, {"t": 2})
+
+    def test_directory_flush_actually_runs_on_this_platform(self):
+        """The rename must really be made durable, not quietly skipped.
+
+        A directory flush used to be wrapped in `except OSError: pass`. On
+        Windows `os.open(dir)` always raises PermissionError, so the guarantee
+        was silently absent on the platform the project actually runs on. This
+        test fails if the flush degrades into a no-op again.
+        """
+        import origin.core.objects as objmod
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "sentinel.txt"
+            target.write_text("durable", encoding="utf-8")
+            objmod._flush_directory(Path(tmpdir))  # must not raise on any platform
+
+    def test_failed_directory_flush_is_reported_not_swallowed(self):
+        """A weakened durability guarantee has to reach the operator.
+
+        The acknowledged version still survives -- the rename is atomic and the
+        file contents were fsynced -- so this is a weaker promise, not data loss.
+        Silently swallowing it would violate invariant 7: nothing the human has
+        been told exists may be silently lost.
+        """
+        from unittest.mock import patch
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+        import origin.core.objects as objmod
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-degraded")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+
+            with patch.object(objmod, "_flush_directory", side_effect=OSError("no flush here")):
+                obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+
+            degraded = [e for e in store.recovery_events if e["kind"] == "durability.degraded"]
+            self.assertEqual(len(degraded), 1, store.recovery_events)
+            self.assertEqual(degraded[0]["reason"], "directory_flush_failed")
+
+            # The data itself must still be intact and still readable.
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.read("alice", obj.object_id, cap).payload, {"t": 0})
+
+    def test_sweep_is_a_dry_run_until_told_otherwise(self):
+        """Automatic retention must not be triggerable by accident.
+
+        Section 3 states tiering as policy, but a policy that quietly deletes
+        durable history is worse than no policy. So `sweep` previews by default
+        and only reclaims when explicitly applied.
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+        store.pin("alice", obj.object_id, 0, cap)
+        store.prefer("alice", obj.object_id, 1, cap)
+
+        preview = store.sweep("alice", cap, keep_recent=3, min_versions=5)
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["versions_reclaimed"], 0)
+        self.assertEqual(preview["objects_swept"], 0)
+        self.assertEqual(len(preview["candidates"]), 1, "the long history should be a candidate")
+        # Nothing touched: every payload is still readable.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"t": 2})
+
+    def test_sweep_applies_tiered_policy_and_spares_protected_versions(self):
+        """Applying the sweep must respect pins and the preferred version.
+
+        Section 3: pins are never auto-removed, and the preferred version is the
+        one a restart respawns from -- reclaiming it would break recovery.
+        Metadata must survive even when payloads do not (invariant 7).
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import CompactedError, ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep-apply")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+        store.pin("alice", obj.object_id, 0, cap)
+        store.prefer("alice", obj.object_id, 2, cap)
+
+        result = store.sweep("alice", cap, keep_recent=3, min_versions=5, dry_run=False)
+        self.assertEqual(result["objects_swept"], 1)
+        self.assertGreater(result["versions_reclaimed"], 0)
+
+        # The three most recent stay at full fidelity.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=11).payload, {"t": 11})
+        # The pinned version survives.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+        # The preferred version survives -- reading it must not raise.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"t": 2})
+
+        # Something was actually reclaimed.
+        with self.assertRaises(CompactedError):
+            store.read("alice", obj.object_id, cap, seq=5)
+
+        # But its metadata was kept forever.
+        history = {v["seq"]: v for v in store.history("alice", obj.object_id, cap)}
+        self.assertIn(5, history)
+        self.assertEqual(history[5]["author"], "alice")
+        self.assertTrue(history[5]["acked"])
+
+    def test_sweep_leaves_short_histories_alone(self):
+        """A short history is usually worth more whole, and saves nothing."""
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep-short")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "note", {"t": 0}, cap, step=1)
+        for t in range(1, 4):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+
+        report = store.sweep("alice", cap, keep_recent=1, min_versions=32, dry_run=False)
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(report["objects_swept"], 0)
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+
+    def test_sweep_needs_pin_authority(self):
+        """Compaction is gated on PIN because retention policy is a human decision."""
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-no-sweep")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+
+        with self.assertRaises(PermissionError):
+            store.sweep("alice", None, keep_recent=3, min_versions=5)
 
     def test_object_store_falls_back_to_backup_only_when_it_loses_nothing(self):
         import json
@@ -624,7 +789,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["started_at"] = 12
         agent.arena["last_heartbeat"] = 15
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         self.assertEqual(report["agents"][0]["name"], "live-agent")
         self.assertEqual(report["agents"][0]["state"], "running")
         self.assertEqual(report["agents"][0]["started_at"], 12)
@@ -642,7 +807,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["tools"] = ["read", "write"]
         agent.arena["memory_scope"] = {"objects": ["obj-beach"], "max_bytes": 128}
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "tool-agent")
         self.assertEqual(target["tools"], ["read", "write"])
         self.assertEqual(target["memory_scope"]["max_bytes"], 128)
@@ -663,7 +828,7 @@ class TestPackage(unittest.TestCase):
         self.assertIsNotNone(unit.arena.get("failed_at"))
 
         unit.arena["replaced_by"] = "replacement-agent"
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "flaky-agent")
         self.assertEqual(target["state"], "failed")
         self.assertEqual(target["failure_reason"], "timeout")
@@ -683,7 +848,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["last_heartbeat"] = 15
         system.nucleus.freeze(agent.unit_id, by=NUCLEUS, reason="test containment")
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "contained-agent")
         self.assertEqual(target["state"], "frozen")
 
@@ -1231,7 +1396,9 @@ class TestPackage(unittest.TestCase):
 
         self.assertTrue(result)
         output = buffer.getvalue()
-        self.assertIn("Origin — Phase 1", output)
+        # Asserted against __phase__ rather than a literal, so the help text and
+        # the phase label cannot drift apart again.
+        self.assertIn(f"Origin — {__phase__}", output)
         self.assertIn("/status", output)
         self.assertIn("/log", output)
         self.assertIn("/watcher", output)
@@ -1252,7 +1419,10 @@ class TestPackage(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("Origin Phase 1", result.stdout)
+        # The captured pipe is decoded with the platform's default code page, so
+        # the em-dash in __phase__ may arrive mangled. Assert on the ASCII-safe
+        # part: the description must be built from the same label the banner uses.
+        self.assertIn(__phase__.split(" ")[1], result.stdout)
 
 
 class TestReclaimableReport(unittest.TestCase):
