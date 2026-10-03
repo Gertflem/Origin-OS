@@ -193,6 +193,18 @@ acting through it would bypass propose-then-confirm. Selecting an Object on the
 canvas therefore routes to the Console, which keeps the intent loop as the only path
 to authority.
 
+Recovery reaches the human through the same loop. `history`, `undo` and `restore`
+are verbs in the Naming Unit's table, so they propose scoped Capabilities and run
+only on confirmation like everything else — there is no unconfirmed "revert" button.
+
+`undo` reads an earlier version and holds no authority over the current state at
+all. `restore` moves the preferred pointer, which is the same operation the
+Improver uses to promote a repaired Unit. Both are therefore reversible in the same
+way, and neither can become destructive: the version that was current stays
+addressable by seq. A version reference that does not exist is refused with the
+range that does, rather than clamped to the nearest one, because a clamped answer
+would be indistinguishable from a real one.
+
 The intent loop the Console implements is section 8's promise:
 
 ```text

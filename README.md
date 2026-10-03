@@ -96,6 +96,22 @@ RESULT:
 Nothing happens without the Capability. `confirm` mints exactly the token that
 was quoted, scoped to one Object, with an expiry.
 
+The same loop reaches the versioned history, which is the point — reversal is not a
+special feature but the substrate the system already uses on itself:
+
+```text
+history the beach photo        # every version, with author, step and note
+undo the beach photo           # read the version before the current one
+restore version 0 of the beach photo   # make an earlier version current again
+```
+
+`restore` moves the preferred pointer rather than deleting anything, so the version
+it superseded is still there — the same mechanism the Improver uses to promote a
+repaired Unit, and reversible for the same reason. `undo` holds no authority over
+the current state at all; it only reads an earlier version, so it cannot quietly
+become a destructive operation. A version that does not exist is refused with the
+range that does, rather than clamped to the nearest one.
+
 ## See what compaction could reclaim
 
 Compaction is a deliberate choice, so Origin shows what it would reclaim before

@@ -53,6 +53,9 @@ HELP = f"""Origin — {__phase__}. Say what you want, or use a command.
     send the beach photo to David
     show the beach photo
     count the tally
+    history the beach photo
+    undo the beach photo
+    restore version 0 of the beach photo
 
   inspection (costs nothing new; the Console holds AUDIT)
     /help              this text
@@ -1395,8 +1398,23 @@ def _run_intent(ctx: UnitContext, plan: dict, i: int, results: list[dict]) -> No
     kind = step.get("unit_kind")
 
     if not kind:
-        # `show` is the Console reading for itself, under a token minted for this
-        # one ask. It holds no standing READ on anything.
+        # The Console handles these itself, under tokens minted for this one ask. It
+        # holds no standing READ or HISTORY on anything, so every one of these
+        # costs an explicit grant the human has just confirmed -- which is the point
+        # of section 8's loop, not a shortcut around it.
+        verb = step.get("verb")
+        rights = tuple(Right(r) for r in step.get("rights", ()))
+        if verb in ("history", "undo", "restore"):
+            _mint(
+                ctx,
+                rights,
+                step.get("target"),
+                f"intent: {verb}",
+                ctx.id,
+                lambda c, cap: _versioned_intent(c, cap, step, plan, i, results),
+            )
+            return
+        # `show` is the Console reading for itself.
         _mint(
             ctx,
             (Right.READ,),
@@ -1417,6 +1435,172 @@ def _run_intent(ctx: UnitContext, plan: dict, i: int, results: list[dict]) -> No
         _grants_for(step),
         actor,
         lambda c: _act(c, step, plan, i, results, actor),
+    )
+
+
+#: Ordinals a person would say, mapped onto an offset from the newest version.
+#:
+#: Kept here rather than in the Naming Unit because only the store knows how many
+#: versions an Object has, so these cannot be resolved at parse time. "last" is 0,
+#: "previous" is 1, and so on; an ordinal past the beginning of history is refused
+#: rather than clamped, because silently returning the oldest version for "the
+#: third version" would be inventing history that does not exist.
+ORDINAL_OFFSETS = {"last": 0, "latest": 0, "previous": 1, "prior": 1, "first": None,
+                   "second": None, "third": None}
+POSITIONAL = {"first": 0, "second": 1, "third": 2}
+
+
+def _versioned_intent(
+    ctx: UnitContext, cap: Capability, step: dict, plan: dict, i: int, results: list[dict]
+) -> None:
+    """Serve `history`, `undo` and `restore` from the versioned substrate.
+
+    None of these is a special operation. `history` reads the version list, `undo`
+    reads one earlier version, and `restore` moves the preferred pointer. All three
+    are things the store already does for the Improver and the Console, so the human
+    gets the same recovery mechanism the system uses on itself -- which is what
+    section 3 and section 7 mean by history being the substrate rather than a feature.
+    """
+    store = _services(ctx).get("object_store")
+    object_id = step.get("target")
+    verb = step.get("verb")
+    if store is None or not object_id:
+        results.append({"step": step, "error": "no Object store is running, or no target resolved"})
+        _run_intent(ctx, plan, i + 1, results)
+        return
+
+    if verb == "history":
+        ctx.request(
+            store, "object.history", {"object_id": object_id}, (cap,),
+            then=lambda c, reply: _history_done(c, reply, step, plan, i, results),
+        )
+        return
+
+    # Resolving "the last version" needs the Object's length, and only HISTORY
+    # reports it -- `describe` is AUDIT-gated, and AUDIT is about inspecting the
+    # system rather than about reading one Object's own version list. So these verbs
+    # cost HISTORY, which their proposal already quotes to the human.
+    hist = ctx.hold(Right.HISTORY, object_id)
+    if hist is None:
+        results.append({"step": step, "error": "no HISTORY Capability to resolve the version"})
+        _run_intent(ctx, plan, i + 1, results)
+        return
+    ctx.request(
+        store, "object.history", {"object_id": object_id}, (hist,),
+        then=lambda c, reply: _version_count(c, reply, step, plan, i, results),
+    )
+
+
+def _version_count(
+    ctx: UnitContext, reply: Message, step: dict, plan: dict, i: int, results: list[dict]
+) -> None:
+    """Turn "the last version" into a concrete seq, using the Object's length."""
+    if reply.verb != "object.history":
+        results.append({"step": step, "error": f"the store said: {reply.payload}"})
+        _run_intent(ctx, plan, i + 1, results)
+        return
+    _resolve_and_act(ctx, step, plan, i, results, len(reply.payload.get("versions", [])))
+
+
+def _resolve_and_act(
+    ctx: UnitContext, step: dict, plan: dict, i: int, results: list[dict], count: int
+) -> None:
+    reference = step.get("seq_reference")
+    if reference is None:
+        seq = (count - 2) if step.get("verb") == "undo" else (count - 1 if count else None)
+    elif reference.isdigit():
+        seq = int(reference)
+    elif reference in POSITIONAL:
+        seq = POSITIONAL[reference]
+    else:
+        offset = ORDINAL_OFFSETS.get(reference)
+        seq = (count - 1 - offset) if offset is not None else None
+
+    # Refuse rather than clamp. Silently returning the oldest version for "the
+    # third version" of a two-version Object would be inventing history.
+    if seq is None or not 0 <= seq < count:
+        results.append(
+            {
+                "step": step,
+                "error": f"there is no version {reference or 'previous'!r} of this Object; "
+                         f"it has {count} version(s), seq 0 to {count - 1}",
+            }
+        )
+        _run_intent(ctx, plan, i + 1, results)
+        return
+
+    if step.get("verb") == "restore":
+        _mint(
+            ctx,
+            (Right.APPEND,),
+            step.get("target"),
+            f"intent: restore version {seq}",
+            ctx.id,
+            lambda c, cap: _do_restore(c, cap, step, plan, i, results, seq),
+        )
+        return
+
+    _mint(
+        ctx,
+        (Right.READ,),
+        step.get("target"),
+        f"intent: undo to version {seq}",
+        ctx.id,
+        lambda c, cap: _do_read_version(c, cap, step, plan, i, results, seq),
+    )
+
+
+def _history_done(
+    ctx: UnitContext, reply: Message, step: dict, plan: dict, i: int, results: list[dict]
+) -> None:
+    if reply.verb != "object.history":
+        results.append({"step": step, "error": f"the store said: {reply.payload}"})
+        _run_intent(ctx, plan, i + 1, results)
+        return
+    rows = reply.payload.get("versions", [])
+    results.append(
+        {
+            "step": step,
+            "reply": reply.verb,
+            "history": [
+                f"  seq {r['seq']:>3}  step {r['step']:>4}  {r['author']}"
+                f"{'  [compacted, metadata only]' if r.get('compacted') else ''}  {r.get('note', '')}"
+                for r in rows
+            ],
+        }
+    )
+    _run_intent(ctx, plan, i + 1, results)
+
+
+def _do_restore(
+    ctx: UnitContext, cap: Capability, step: dict, plan: dict, i: int, results: list[dict], seq: int
+) -> None:
+    """Mark an earlier version preferred, the same mechanism the Improver uses.
+
+    This does not delete the newer version. It moves a pointer, which is why
+    "restore" is reversible in the same way an improvement is: the version that was
+    current is still there, addressable by seq.
+    """
+    store = _services(ctx).get("object_store")
+    ctx.request(
+        store,
+        "object.prefer",
+        {"object_id": step.get("target"), "seq": seq},
+        (cap,),
+        then=lambda c, reply: _acted(c, reply, step, plan, i, results),
+    )
+
+
+def _do_read_version(
+    ctx: UnitContext, cap: Capability, step: dict, plan: dict, i: int, results: list[dict], seq: int
+) -> None:
+    store = _services(ctx).get("object_store")
+    ctx.request(
+        store,
+        "object.read",
+        {"object_id": step.get("target"), "seq": seq},
+        (cap,),
+        then=lambda c, reply: _acted(c, reply, step, plan, i, results),
     )
 
 
@@ -1506,6 +1690,18 @@ def _intent_report(ctx: UnitContext, results: list[dict]) -> None:
             lines.append(f"{head}: count is now {p.get('count')} (seq {p.get('seq')})")
         elif verb == "object.appended":
             lines.append(f"{head}: appended seq {p.get('seq')}")
+        elif r.get("history") is not None:
+            # The version list is the point of asking, so print all of it rather
+            # than summarising. A history that shows only its own summary is the
+            # kind of thing section 8 is arguing against.
+            rows = r["history"]
+            lines.append(f"{head}: {len(rows)} versions")
+            lines.extend(rows)
+        elif verb == "object.preferred":
+            lines.append(
+                f"{head}: seq {p.get('seq')} is now the preferred version "
+                "(earlier versions are untouched, so this is reversible)"
+            )
         elif verb.endswith((".denied", ".error", ".rejected", ".compacted_away")):
             lines.append(f"{head}: REFUSED — {p.get('reason', p)}")
         else:

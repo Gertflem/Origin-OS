@@ -73,6 +73,10 @@ class IntentVerb:
     synonyms: tuple[str, ...] = ()
     #: True when the action needs a recipient as well as a target.
     takes_recipient: bool = False
+    #: True when the action refers to a specific version, as in "go back to
+    #: version 2". The seq is parsed out of the clause rather than being a second
+    #: target, because it qualifies the target rather than naming another Object.
+    takes_seq: bool = False
     describe_result: bool = False
 
     @property
@@ -122,6 +126,49 @@ INTENT_VERBS: tuple[IntentVerb, ...] = (
         synonyms=("display", "read", "open", "look at", "what is"),
         describe_result=True,
     ),
+    IntentVerb(
+        action="undo",
+        unit_kind="",
+        verb="undo",
+        # Section 3: history is the mechanism, so reversing is a matter of reading an
+        # earlier version. HISTORY is needed to turn "the last version" into a
+        # concrete seq, and it is quoted to the human rather than quietly acquired.
+        # No authority over the *current* state is needed, which is why "undo" cannot
+        # quietly become a destructive operation.
+        rights=(Right.READ, Right.HISTORY),
+        # "restore" is deliberately absent: it is a different action with a
+        # different effect (it moves the preferred pointer rather than reading an
+        # earlier version), and listing it here made "restore version 0" report
+        # itself as an undo.
+        synonyms=("revert", "roll back", "rollback", "go back to", "undo"),
+        takes_seq=True,
+        describe_result=True,
+    ),
+    IntentVerb(
+        action="history",
+        unit_kind="",
+        verb="history",
+        rights=(Right.HISTORY,),
+        synonyms=("versions", "revision history", "what changed", "timeline"),
+        describe_result=True,
+    ),
+    IntentVerb(
+        action="restore",
+        unit_kind="",
+        verb="restore",
+        # Restoring marks an earlier version preferred. That is the same mechanism
+        # the Improver uses to promote a repaired Unit, which is the point: recovery
+        # is not a special path, it is the versioned substrate working normally.
+        #
+        # HISTORY resolves the version reference; APPEND is what `prefer` gates on,
+        # not because restoring writes a version -- nothing is written. Preferring
+        # only moves a pointer, and the superseded version stays addressable by seq,
+        # so this is reversible in exactly the way an Improver's improvement is.
+        rights=(Right.READ, Right.HISTORY, Right.APPEND),
+        synonyms=("make current", "set as current", "prefer"),
+        takes_seq=True,
+        describe_result=True,
+    ),
 )
 
 #: Clause separators. Splitting intent into a sequence of actions is what lets
@@ -146,6 +193,13 @@ WORDS = re.compile(r"[a-z0-9']+")
 
 #: A trailing numeric parameter: "by 20", "to 0.5", "to 50%".
 MODIFIER = re.compile(r"\b(?:by|to|at)\s+(-?\d+(?:\.\d+)?)\s*(%|percent)?\s*$")
+
+#: An explicit version reference: "version 2", "seq 0", "the last version",
+#: "the version before that". Ordinals and "last" are resolved against the target
+#: Object's length at execution time, not here, because only the store knows how
+#: many versions exist.
+SEQ_REFERENCE = re.compile(r"\b(?:version|seq|revision)\s+(?:number\s+)?(-?\d+)\b")
+ORDINAL = re.compile(r"\b(?:the\s+)?(first|second|third|last|latest|previous|prior)\b")
 
 
 def normalize_phrase(text: str) -> str:
@@ -234,6 +288,9 @@ class ParseStep:
     recipient: str | None = None
     recipient_score: float = 0.0
     modifier: float | None = None
+    #: "version 2", "last", "previous" — resolved to a concrete seq at execution
+    #: time by whichever Unit holds the Object, because only it knows the history.
+    seq_reference: str | None = None
     describe_result: bool = False
     candidates: list[dict] = field(default_factory=list)
 
@@ -253,6 +310,7 @@ class ParseStep:
             "recipient_phrase": self.recipient_phrase,
             "recipient": self.recipient,
             "modifier": self.modifier,
+            "seq_reference": self.seq_reference,
             "candidates": self.candidates,
         }
 
@@ -290,7 +348,37 @@ def strip_verb(clause: str, iv: IntentVerb) -> str:
         out = re.sub(rf"\b{re.escape(syn)}\b", " ", out)
     out = re.sub(r"\b(?:make|please|could you|can you|i want to|turn|get|set)\b", " ", out)
     out = re.sub(r"\b(?:a bit|slightly|very|much|some)\b", " ", out)
+    # Carry-overs from the sequence verbs. "Go back to version 2 of the photo"
+    # strips to "go back", and leaving that in turns the target phrase into a
+    # phrase that matches nothing -- the intent then fails to resolve rather than
+    # resolving wrongly, which is better but still a poor answer. These are the
+    # words undo/restore are built from, so they have to go with them.
+    out = re.sub(r"\b(?:go|back|undo|revert|restore|roll)\b", " ", out)
+    out = re.sub(r"\b(?:what|changed|in|of|make|current)\b", " ", out)
     return re.sub(r"\s+", " ", out).strip()
+
+
+def extract_seq(clause: str) -> tuple[str | None, str]:
+    """Pull a version reference out of a clause, returning (reference, remainder).
+
+    "Go back to version 2 of the beach photo" has to shed "version 2" before the
+    phrase is resolved, or the target phrase becomes "version 2 of the beach photo"
+    and matches nothing. The reference is kept as a *string* because ordinals like
+    "the last version" cannot be turned into a seq until the store has said how many
+    versions the Object has.
+    """
+    clean = normalize_phrase(clause)
+
+    m = SEQ_REFERENCE.search(clean)
+    if m:
+        return m.group(1), (clean[: m.start()] + " " + clean[m.end() :]).strip()
+
+    m = ORDINAL.search(clean)
+    if m:
+        word = m.group(1)
+        return word, (clean[: m.start()] + " " + clean[m.end() :]).strip()
+
+    return None, clean
 
 
 @unit_type("naming")
@@ -420,8 +508,35 @@ def _parse(text: str, focus: dict | None, resolve_phrase) -> dict:
             continue
 
         modifier, remainder = extract_modifier(clause)
-        recipient_phrase, remainder = extract_recipient(remainder)
+        # Version references are pulled before everything else, and only for verbs
+        # that take one. "go back to version 2 of the beach photo" has to shed the
+        # reference first, or the target phrase matches nothing and "to ..." is
+        # misread as a recipient.
+        seq_reference = None
+        if iv.takes_seq:
+            seq_reference, remainder = extract_seq(remainder)
+        # Only pull a recipient for verbs that take one. Otherwise "go back to
+        # version 2 of the beach photo" has "of the beach photo" stripped off as a
+        # recipient and the target ends up empty -- a confidently wrong parse of a
+        # sentence the human wrote perfectly clearly.
+        recipient_phrase = None
+        if iv.takes_recipient:
+            recipient_phrase, remainder = extract_recipient(remainder)
         target_phrase = strip_verb(remainder, iv)
+        # A leftover "version" with the number already lifted out is noise, not a
+        # target: "restore the version of the tally" means the tally.
+        if iv.takes_seq:
+            # "undo to version 9 of X" leaves a dangling "to" once the reference
+            # is lifted, and "to X" would then score as a prefix match against
+            # almost nothing -- or resolve to a contact, since "to" is what marks a
+            # recipient everywhere else.
+            target_phrase = re.sub(r"^\s*(?:to|for)\s+", "", target_phrase)
+            target_phrase = re.sub(r"\b(?:version|revision|seq)\b", " ", target_phrase)
+            # Removing the word can leave doubled or leading articles behind,
+            # because the filler pass ran before this one.
+            target_phrase = re.sub(r"\b(?:the|a|an)\s+(?:the|a|an)\b", "the", target_phrase)
+            target_phrase = re.sub(r"^(?:the|a|an)\s+(?:the|a|an)\s+", "the ", target_phrase)
+            target_phrase = re.sub(r"\s+", " ", target_phrase).strip()
 
         step = ParseStep(
             action=iv.action,
@@ -431,6 +546,7 @@ def _parse(text: str, focus: dict | None, resolve_phrase) -> dict:
             target_phrase=target_phrase,
             recipient_phrase=recipient_phrase,
             modifier=modifier,
+            seq_reference=seq_reference,
             describe_result=iv.describe_result,
         )
 

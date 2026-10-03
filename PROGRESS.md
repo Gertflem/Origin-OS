@@ -56,7 +56,8 @@ which is portable and a more precise description of the crash window.
 - [x] 3.2 Retention runs unattended in the Retention Unit (`units/retention.py`), triggered by appends rather than a clock — section 4 says Units sleep at zero cost, and section 2 gives the Nucleus no timer power, so waiting for a deadline would either burn the scheduler or grow the core. It holds PIN and nothing else beyond SEND. Visible at `/retention`, and it is a demo Unit rather than a sixth boot Unit because housekeeping is not something the system cannot run without
 - [x] 3.3 Studio Unit — section 8's other human interface (`units/studio.py`): Objects on a grid grouped by kind, with version and compaction counts. Holds AUDIT, SEND and RESOLVE and nothing that mutates, so acting on an Object still goes through the Console's propose-then-confirm loop. Spawned rather than added to `BOOT_ORDER`, because both human interfaces are ordinary Units that may evolve. `/studio`, `/studio layout`, `/studio focus <name>`
 - [ ] Studio: the canvas is text-rendered, not graphical. It carries position and grouping, but a real spatial surface would need a display the simulation does not have
-- [ ] Intent loop widened past the current verb set (deictic follow-ups and compound recipients already work)
+- [x] 3.4 Intent loop reaches versioned history: `history`, `undo` and `restore` by plain language, including ordinal and positional references ("the last version", "the second version"). `undo` only ever reads an earlier version — no authority over current state — so it cannot become a destructive operation wearing a reassuring name. `restore` moves the preferred pointer, the same mechanism the Improver uses, so it stays reversible. Nonexistent versions are refused with the real range rather than clamped
+- [ ] Intent loop: the verb table is still rule-based. That is deliberate (section 8 wants every step inspectable) but it means coverage grows one verb at a time
 
 ## Working rule
 

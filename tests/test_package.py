@@ -572,6 +572,252 @@ class TestPackage(unittest.TestCase):
         system = boot()
         self.assertIn("retention", system.services)
 
+
+class TestVersionedIntents(unittest.TestCase):
+    """Phase 3: history, undo and restore, reachable by plain language.
+
+    The point of these verbs is that they are not a special "undo" feature. They
+    are the versioned substrate the Improver and restart already rely on, exposed
+    to the human through the same propose-then-confirm loop as everything else.
+    """
+
+    def _system(self):
+        from origin.core.bootstrap import boot, BEACH_PHOTO
+        return boot(), BEACH_PHOTO
+
+    def _run(self, system, lines: list[str]) -> str:
+        from origin.main import _handle
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            for line in lines:
+                _handle(system, line)
+        return buffer.getvalue()
+
+    def test_history_undo_and_restore_end_to_end(self):
+        """The full arc: edit, inspect history, undo, then actually restore."""
+        system, photo = self._system()
+
+        out = self._run(system, ["brighten the beach photo by 20", "confirm"])
+        self.assertIn("brightened by 20", out)
+
+        out = self._run(system, ["history the beach photo", "confirm"])
+        self.assertIn("2 versions", out)
+        self.assertIn("genesis", out)
+
+        # Undo reads the earlier version without changing anything.
+        out = self._run(system, ["undo the beach photo", "confirm"])
+        self.assertIn("undo: seq 0", out)
+        self.assertIn("brightness: 50", out)
+
+        # Restore moves the preferred pointer, so the effective version is seq 0.
+        out = self._run(system, ["restore version 0 of the beach photo", "confirm"])
+        self.assertIn("preferred version", out)
+        # Restore moves a pointer; the superseded version is still there, which is
+        # what makes it reversible rather than destructive.
+        self.assertEqual(system.store._objects[photo].preferred, 0)
+        self.assertEqual(len(system.store._objects[photo].versions), 2)
+
+        out = self._run(system, ["show the beach photo", "confirm"])
+        self.assertIn("brightness: 50", out)
+
+    def test_undo_costs_no_authority_over_the_current_state(self):
+        """Undo must not quietly become a write.
+
+        Section 3 makes history the mechanism for reversal, so undo only ever *reads*
+        an earlier version. If it could write, "undo" would be a destructive
+        operation wearing a reassuring name.
+        """
+        from origin.units.naming import INTENT_VERBS
+
+        by_action = {v.action: v for v in INTENT_VERBS}
+        from origin.core.capability import Right
+
+        undo_rights = set(by_action["undo"].rights)
+        self.assertIn(Right.READ, undo_rights)
+        self.assertNotIn(Right.APPEND, undo_rights)
+        self.assertNotIn(Right.PIN, undo_rights)
+
+        system, photo = self._system()
+        self._run(system, ["brighten the beach photo by 20", "confirm"])
+        before = len(system.store._objects[photo].versions)
+        self._run(system, ["undo the beach photo", "confirm"])
+        self.assertEqual(len(system.store._objects[photo].versions), before,
+                         "undo must not append a version")
+
+    def test_undo_refuses_a_version_that_does_not_exist(self):
+        """Refuse rather than clamp.
+
+        Silently returning the oldest version for "undo to version 9" of a
+        two-version Object would be inventing history, and the human would have no
+        way to tell it apart from a real answer.
+        """
+        system, _ = self._system()
+        self._run(system, ["brighten the beach photo by 20", "confirm"])
+        out = self._run(system, ["undo to version 9 of the beach photo", "confirm"])
+        self.assertIn("no version", out)
+        self.assertIn("seq 0 to 1", out)
+
+    def test_restore_and_undo_are_distinct_actions(self):
+        """"restore" listed as an undo synonym made restore report itself as an undo.
+
+        They are different: undo reads an earlier version, restore moves the
+        preferred pointer. Conflating them meant the human was told one thing and
+        the system did another.
+        """
+        from origin.units.naming import INTENT_VERBS
+
+        undo = next(v for v in INTENT_VERBS if v.action == "undo")
+        restore = next(v for v in INTENT_VERBS if v.action == "restore")
+        self.assertNotIn("restore", undo.synonyms)
+        self.assertNotIn("undo", restore.synonyms)
+
+    def test_ordinal_and_positional_version_references(self):
+        """The phrasings a person actually types, not just "version N"."""
+        from origin.units.naming import _parse
+
+        def first_step(text):
+            plan = _parse(text, None, lambda p, k: (None, 0.0, []))
+            self.assertTrue(plan["steps"], text)
+            return plan["steps"][0]
+
+        cases = {
+            "restore the last version of the beach photo": ("the beach photo", "last"),
+            "restore version 2 of the beach photo": ("the beach photo", "2"),
+            "undo the second version of the beach photo": ("the beach photo", "second"),
+            "go back to version 1 of the beach photo": ("the beach photo", "1"),
+        }
+        for text, (target, seq) in cases.items():
+            with self.subTest(text=text):
+                step = first_step(text)
+                self.assertEqual(step["target_phrase"], target)
+                self.assertEqual(step["seq_reference"], seq)
+
+    def test_version_reference_does_not_swallow_the_target(self):
+        """Regression: "go back to version 2 of X" used to resolve an empty target.
+
+        Two failures compounded. The "to ..." was read as a recipient, and the
+        sequence verb's own words ("go back") were left in the target phrase, so the
+        intent failed to resolve rather than resolving wrongly.
+        """
+        from origin.units.naming import _parse
+
+        plan = _parse("go back to version 2 of the beach photo", None, lambda p, k: (None, 0.0, []))
+        step = plan["steps"][0]
+        self.assertEqual(step["target_phrase"], "the beach photo")
+        self.assertEqual(step["seq_reference"], "2")
+        self.assertIsNone(step["recipient_phrase"])
+
+    def test_retention_unit_reclaims_history_without_being_asked(self):
+        """Section 3's tiering policy must actually run, unattended.
+
+        Until the Retention Unit existed the policy only ran when a human typed
+        `/sweep apply`, so in practice it never ran. This asserts the automatic
+        path: appends happen, the store ticks the Retention Unit, and payloads are
+        reclaimed with no operator involvement.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot(retention_min_versions=5, retention_keep_recent=2)
+        store_id = system.services["object_store"]
+        retention_id = system.services["retention"]
+
+        for t in range(1, 14):
+            system.nucleus.send_message(
+                Message(HUMAN, store_id, "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(system.guardian,))
+            )
+        system.nucleus.schedule()
+
+        obj = system.store._objects[TALLY]
+        self.assertTrue(obj.compacted, "retention should have reclaimed something")
+        # Current state is intact and the newest version survives at full fidelity.
+        self.assertEqual(system.store.read(HUMAN, TALLY, system.guardian).payload, {"count": 13})
+        self.assertEqual(
+            system.store.read(HUMAN, TALLY, system.guardian, seq=obj.latest_seq).payload, {"count": 13}
+        )
+        # Reclaimed payloads are gone but their metadata is retained (invariant 7).
+        history = {v["seq"]: v for v in system.store.history(HUMAN, TALLY, system.guardian)}
+        self.assertTrue(history[0]["compacted"])
+        self.assertEqual(history[0]["author"], HUMAN)
+        # And it happened through the Unit, which recorded what it did.
+        log = system.nucleus._arenas[retention_id]["log"]
+        self.assertTrue(any(e.get("versions_reclaimed") for e in log), log)
+
+    def test_retention_is_dry_run_unless_apply_is_set(self):
+        """Guards the polarity of the `apply` flag.
+
+        `apply` maps to sweep's `dry_run` parameter, inverted. Getting that backwards
+        would make an automated sweep silently reclaim nothing while reporting
+        success -- a failure that looks like success, which is the worst kind.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot(retention_min_versions=5, retention_keep_recent=2)
+        store_id = system.services["object_store"]
+        for t in range(1, 14):
+            system.nucleus.send_message(
+                Message(HUMAN, store_id, "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(system.guardian,))
+            )
+        system.nucleus.schedule()
+
+        # Enabled by default and it really did reclaim.
+        self.assertTrue(system.store._objects[TALLY].compacted)
+
+        # Disabled: appends must leave history untouched.
+        quiet = boot(retention_enabled=False, retention_min_versions=5, retention_keep_recent=2)
+        for t in range(1, 14):
+            quiet.nucleus.send_message(
+                Message(HUMAN, quiet.services["object_store"], "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(quiet.guardian,))
+            )
+        quiet.nucleus.schedule()
+        self.assertEqual(quiet.store._objects[TALLY].compacted, set())
+
+    def test_retention_holds_no_authority_beyond_reclaiming(self):
+        """Section 5: authority exists only as explicit, narrow Capabilities.
+
+        The Retention Unit may reclaim payloads and report on itself. It must not
+        be able to inspect the system, mint authority, kill Units, or spawn them --
+        a housekeeping Unit with any of those is a much larger blast radius than
+        its job requires.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+
+        system = boot()
+        retention_id = system.services["retention"]
+        held = set()
+        for rec in system.nucleus._caps.values():
+            if retention_id in rec.holders:
+                held |= rec.rights
+
+        self.assertIn(Right.PIN, held)
+        self.assertIn(Right.SEND, held)
+        for forbidden in (Right.AUDIT, Right.GRANT, Right.REVOKE, Right.KILL, Right.FREEZE,
+                          Right.SPAWN, Right.GUARDIAN):
+            self.assertNotIn(forbidden, held, f"retention must not hold {forbidden}")
+
+    def test_retention_is_an_ordinary_unit_not_a_boot_unit(self):
+        """It must be killable, replaceable, and absent from the Constitution's set.
+
+        Section 9 fixes the boot set as the Units the system cannot run without.
+        Housekeeping is not that: if this Unit dies the system still works, history
+        just stops being reclaimed. Growing BOOT_ORDER would make it
+        unkillable-by-accident.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.constitution import BOOT_ORDER, is_boot_unit
+
+        self.assertNotIn("retention", BOOT_ORDER)
+        self.assertFalse(is_boot_unit("retention"))
+        system = boot()
+        self.assertIn("retention", system.services)
+
     def test_kind_scoped_token_covers_any_object_of_that_kind(self):
         """A kind scope is about the kind, not a list of ids.
 
