@@ -1279,6 +1279,40 @@ class TestReviewFindings(unittest.TestCase):
             self.assertEqual(reopened.history_damage, [])
             self.assertEqual(reopened.read("human", "obj_legacy", cap).payload, {"t": 0})
 
+    def test_an_in_place_payload_mutation_is_not_detected(self):
+        """The digest verifies file-vs-file consistency, not authoring-time truth.
+
+        `Version` is frozen but `payload` is a mutable container, so mutating a
+        stored payload in place rewrites history: the next persist hashes the
+        mutated content and the original acknowledged version is simply gone,
+        with `history_damage == []`. Nothing in the tree does this, and the
+        digests are not wrong for missing it -- they were never asked to. But
+        the boundary is easy to over-claim, so this test pins it: if this starts
+        failing, the boundary moved on purpose (hash a stored copy, at the cost
+        of a copy per version), and ARCHITECTURE.md section 7 moves with it.
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-inplace")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "journal", {"n": 1}, cap, step=1)
+
+            # The documented boundary: mutate acknowledged history in place,
+            # then persist via an ordinary write.
+            store._objects[obj.object_id].versions[0].payload["n"] = 2
+            store.append("human", obj.object_id, {"n": 3}, cap, step=2)
+
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.history_damage, [],
+                             "in-place mutation must stay invisible until the boundary is fixed")
+            self.assertEqual(reopened.read("human", obj.object_id, cap, seq=0).payload,
+                             {"n": 2},
+                             "the original acknowledged version is gone without a finding")
+
 
 class TestSecondReviewFindings(unittest.TestCase):
     """Regressions for the second adversarial review (VERIFY_BRIEF.md).

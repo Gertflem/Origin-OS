@@ -61,6 +61,18 @@ belongs in `units/`. That distinction is the whole architecture.
   that weakens a guarantee is a bug; see the `durability.degraded` event in
   `objects.py` for the pattern.
 
+## Review your own recent edits first
+
+Before any wider review pass, re-attack what you wrote in the last two commits.
+Both adversarial reviews found their defects there -- the null payloads, the
+handle truncation, the dropped `target_kind`, the ungated `retention.configure`
+-- not in old code. Recent edits are where this codebase fails, and independent
+eyes are the only reliable detector.
+
+Concretely: `git log --oneline -3`, `git show` each of your commits, and review
+them as if someone else wrote them (`VERIFY_BRIEF.md` is the procedure). Do this
+before spending time on a third sweep of the whole tree.
+
 ## Documentation
 
 `CONSTITUTION.md` is the rules and roadmap. `PROGRESS.md` is what is actually
