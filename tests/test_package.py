@@ -58,6 +58,31 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_restart_respawns_units_from_preferred_code_version(self):
+        from origin.core.bootstrap import boot, CODE_OBJECT
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "origin.json"
+            first = boot(storage_path=path)
+            oid = CODE_OBJECT["flaky"]
+            code = dict(first.store.read("human", oid, first.guardian).payload)
+            code["params"] = {**code["params"], "fail_every": 99}
+            v = first.store.append("human", oid, code, first.guardian, note="improved", step=50)
+            first.store.prefer("human", oid, v.seq, first.guardian)
+
+            second = boot(storage_path=path)
+            flaky = second.nucleus._units[second.nucleus._names["flaky"]]
+            self.assertEqual(flaky.code_seq, v.seq)
+            self.assertEqual(flaky.arena["params"]["fail_every"], 99)
+            # Services must be this boot's ids, never the stale ones carried in old code.
+            self.assertEqual(flaky.arena["params"]["services"]["object_store"], second.services["object_store"])
+
+            # Un-preferring (re-preferring seq 0) is the reversible path and must be honoured too.
+            second.store.prefer("human", oid, 0, second.guardian)
+            third = boot(storage_path=path)
+            flaky3 = third.nucleus._units[third.nucleus._names["flaky"]]
+            self.assertEqual(flaky3.code_seq, 0)
+
     def test_boot_with_storage_path_survives_restart(self):
         from origin.core.bootstrap import boot, TALLY
         from origin.main import main

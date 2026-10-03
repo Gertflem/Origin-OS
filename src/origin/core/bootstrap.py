@@ -80,7 +80,7 @@ from .capability import Capability, Right
 from .ids import HUMAN, NUCLEUS
 from .message import Message
 from .nucleus import Nucleus
-from .objects import ObjectNotFound, ObjectStore
+from .objects import CompactedError, ObjectNotFound, ObjectStore
 from .unit import Unit
 
 # Readable Object ids. An id is not a secret: discovering one needs AUDIT or a name
@@ -205,11 +205,24 @@ def boot(
 
     demo: dict[str, Unit] = {}
     for kind, oid in CODE_OBJECT.items():
+        # Start from the *effective* version (preferred if set, else latest), so an
+        # Improver's work and a human's re-preference both survive a restart.
+        # Service ids are minted fresh every boot, so the stored copy is stale by
+        # construction: overlay this boot's ids and keep everything else.
+        params, seq = demo_params[kind], 0
+        try:
+            eff = store.read(HUMAN, oid, guardian)  # read() resolves preferred-else-latest
+            stored = eff.payload.get("params") if isinstance(eff.payload, dict) else None
+            if isinstance(stored, dict):
+                params, seq = {**stored, "services": dict(demo_services)}, eff.seq
+        except (ObjectNotFound, CompactedError):
+            pass
+        demo_params[kind] = params
         demo[kind] = nucleus.spawn(
             HUMAN, kind, kind, kind,
-            params=demo_params[kind],
+            params=params,
             code_object_id=oid,
-            code_seq=0,
+            code_seq=seq,
             authority=guardian,
         )
     demo_ids = {kind: unit.unit_id for kind, unit in demo.items()}
