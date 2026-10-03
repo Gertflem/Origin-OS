@@ -559,6 +559,7 @@ class ObjectStore:
                 "latest_seq": o.latest_seq,
                 "preferred": o.preferred,
                 "pins": sorted(o.pins),
+                "compacted": sorted(o.compacted),
             }
             for o in self._objects.values()
         ]
@@ -585,6 +586,100 @@ class ObjectStore:
         obj.preferred = seq
         self._persist()
 
+    @staticmethod
+    def _reclaimable_seqs(obj: Object, keep_recent: int) -> list[int]:
+        """The seqs `compact` would reclaim for this Object, oldest first.
+
+        This is the single source of truth for what compaction may touch.
+        `compact` acts on it and `reclaimable_report` describes it, so the
+        operator's preview can never disagree with what compaction does.
+        A version is protected if it is within the recent window (which always
+        includes the newest), pinned, the preferred version, or already
+        compacted.
+        """
+        keep_recent = max(1, int(keep_recent))
+        cutoff = obj.latest_seq - keep_recent
+        return [
+            v.seq
+            for v in obj.versions
+            if not (v.seq > cutoff or v.seq in obj.pins or v.seq in obj.compacted or v.seq == obj.preferred)
+        ]
+
+    @staticmethod
+    def _payload_bytes(version: Version) -> int:
+        """Approximate size of a payload as it is persisted (UTF-8 JSON)."""
+        if version.payload is None:
+            return 0
+        return len(json.dumps(version.payload, default=_json_default, sort_keys=True).encode("utf-8"))
+
+    def _reclaimable_row(self, obj: Object, keep_recent: int) -> dict:
+        keep_recent = max(1, int(keep_recent))
+        seqs = self._reclaimable_seqs(obj, keep_recent)
+        wanted = set(seqs)
+        reclaimable_bytes = sum(self._payload_bytes(v) for v in obj.versions if v.seq in wanted)
+        retained_bytes = sum(
+            self._payload_bytes(v) for v in obj.versions if v.seq not in wanted and v.seq not in obj.compacted
+        )
+        cutoff = obj.latest_seq - keep_recent
+        return {
+            "object_id": obj.object_id,
+            "kind": obj.kind,
+            "total_versions": len(obj.versions),
+            "reclaimable_seqs": seqs,
+            "reclaimable_versions": len(seqs),
+            "reclaimable_bytes": reclaimable_bytes,
+            "retained_bytes": retained_bytes,
+            "protected": {
+                "recent": [v.seq for v in obj.versions if v.seq > cutoff],
+                "pinned": sorted(obj.pins),
+                "preferred": obj.preferred,
+                "already_compacted": sorted(obj.compacted),
+            },
+        }
+
+    def reclaimable_report(
+        self,
+        holder: str,
+        cap: Optional[Capability],
+        *,
+        object_id: Optional[str] = None,
+        keep_recent: int = 3,
+    ) -> dict:
+        """Read-only report of what `compact` could reclaim, so compaction is a
+        visible, deliberate choice rather than something discovered afterwards.
+
+        With `object_id`, reports that one Object and needs AUDIT on it. Without
+        it, reports every Object plus store-wide totals and needs namespace-wide
+        AUDIT, the same authority `enumerate` requires. Nothing is modified,
+        persisted or appended: calling this never changes history.
+
+        `keep_recent` is the same window `compact` takes (floored at 1), and the
+        report echoes the value it actually used.
+        """
+        keep_recent = max(1, int(keep_recent))
+        if object_id is not None:
+            obj = self._object(object_id)
+            self._check(cap, Right.AUDIT, object_id, holder)
+            row = self._reclaimable_row(obj, keep_recent)
+            row["keep_recent"] = keep_recent
+            return row
+
+        self._check(cap, Right.AUDIT, None, holder)
+        rows = [self._reclaimable_row(o, keep_recent) for o in self._objects.values()]
+        rows.sort(key=lambda r: (-r["reclaimable_bytes"], r["object_id"]))
+        return {
+            "keep_recent": keep_recent,
+            "objects": rows,
+            "totals": {
+                "objects": len(rows),
+                "objects_with_reclaimable": sum(1 for r in rows if r["reclaimable_versions"]),
+                "total_versions": sum(r["total_versions"] for r in rows),
+                "reclaimable_versions": sum(r["reclaimable_versions"] for r in rows),
+                "reclaimable_bytes": sum(r["reclaimable_bytes"] for r in rows),
+                "retained_bytes": sum(r["retained_bytes"] for r in rows),
+            },
+        }
+
     def compact(self, holder: str, object_id: str, cap: Optional[Capability], *, keep_recent: int = 3) -> dict:
         """Reclaim payloads of old, unpinned versions.
 
@@ -601,13 +696,7 @@ class ObjectStore:
         obj = self._object(object_id)
         self._check(cap, Right.PIN, object_id, holder)
 
-        keep_recent = max(1, int(keep_recent))
-        cutoff = obj.latest_seq - keep_recent
-        reclaimed: list[int] = []
-        for v in obj.versions:
-            if v.seq > cutoff or v.seq in obj.pins or v.seq in obj.compacted or v.seq == obj.preferred:
-                continue
-            reclaimed.append(v.seq)
+        reclaimed = self._reclaimable_seqs(obj, keep_recent)
 
         obj.compacted.update(reclaimed)
         for seq in reclaimed:
