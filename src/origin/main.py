@@ -53,7 +53,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /status  /objects  /history  /units  /names  /caps  /audit  /log  /watcher  /improver  /powers
+  Inspect freely:      /status  /objects  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>   /spawn <kind> <name>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help

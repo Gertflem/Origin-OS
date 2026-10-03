@@ -615,11 +615,20 @@ class Nucleus:
             for unit in self._units.values():
                 if unit.kind != "agent":
                     continue
+                # Containment is kernel truth. A Unit the core has frozen or
+                # killed is not "running" merely because its arena still carries
+                # that self-report; letting the arena win would hide containment
+                # from /agents, which section 8 forbids. While the Unit is alive,
+                # its own lifecycle state is the meaningful one to show.
+                if unit.state in (UnitState.FROZEN, UnitState.DEAD):
+                    state = unit.state.value
+                else:
+                    state = unit.arena.get("state", unit.state.value)
                 rec = {
                     "unit_id": unit.unit_id,
                     "name": unit.name,
                     "kind": unit.kind,
-                    "state": unit.arena.get("state", unit.state.value),
+                    "state": state,
                     "started_at": unit.arena.get("started_at"),
                     "last_heartbeat": unit.arena.get("last_heartbeat"),
                     "stopped_at": unit.arena.get("stopped_at"),

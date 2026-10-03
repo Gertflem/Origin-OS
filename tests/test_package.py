@@ -421,6 +421,46 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(target["failure_reason"], "timeout")
         self.assertEqual(target["replaced_by"], "replacement-agent")
 
+    def test_agent_registry_reports_containment_over_self_report(self):
+        # Section 8: a Unit the core has frozen is not "running" just because its
+        # arena still says so. Containment is kernel truth and must never be
+        # masked by the agent's own last self-report in /agents.
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN, NUCLEUS
+
+        system = boot()
+        agent = system.nucleus.birth("agent", "contained-agent", "agent")
+        agent.arena["state"] = "running"
+        agent.arena["started_at"] = 12
+        agent.arena["last_heartbeat"] = 15
+        system.nucleus.freeze(agent.unit_id, by=NUCLEUS, reason="test containment")
+
+        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        target = next(item for item in report["agents"] if item["name"] == "contained-agent")
+        self.assertEqual(target["state"], "frozen")
+
+    def test_spawned_agent_can_reply_to_console_without_being_contained(self):
+        # /spawn then /agent <name> start must leave the agent alive and answering.
+        # A Unit born at runtime holds nothing, so without a reply channel its
+        # first respond() presents no SEND token reaching the Console and the core
+        # freezes it for capability abuse -- starting the agent would kill it.
+        from origin.main import _to_console, boot
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _to_console(system, "/spawn agent worker")
+            _to_console(system, "confirm")
+            _to_console(system, "/agent worker start")
+        output = buffer.getvalue()
+
+        worker = system.nucleus._units[system.nucleus._names["worker"]]
+        self.assertNotEqual(worker.state.value, "frozen")
+        self.assertNotEqual(worker.state.value, "dead")
+        self.assertGreaterEqual(len(worker.caps), 1)
+        self.assertIn("worker is running", output)
+        self.assertNotIn("left frozen", output)
+
     def test_status_mode_reports_runtime_summary(self):
         from origin.main import main
 
@@ -598,6 +638,24 @@ class TestPackage(unittest.TestCase):
         output = buffer.getvalue()
         self.assertIn("Origin units", output)
         self.assertIn("unit", output.lower())
+
+    def test_agents_command_is_available_in_console(self):
+        from origin.main import _to_console, boot
+
+        system = boot()
+        agent = system.nucleus.birth("agent", "live-agent", "agent")
+        agent.arena["state"] = "running"
+        agent.arena["started_at"] = 12
+        agent.arena["last_heartbeat"] = 15
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _to_console(system, "/agents")
+
+        output = buffer.getvalue()
+        self.assertIn("Agents", output)
+        self.assertIn("live-agent", output)
+        self.assertNotIn("do not know", output.lower())
 
     def test_objects_command_is_available_in_console(self):
         from origin.main import _handle, boot

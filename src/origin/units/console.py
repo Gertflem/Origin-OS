@@ -58,6 +58,7 @@ HELP = """Origin — Phase 1 console. Say what you want, or use a command.
     /names             every binding the Naming Unit holds
     /objects           every Object in the store
     /units             every Unit, its state and its crash count
+    /agents            the agent registry: lifecycle state, heartbeat and tools
     /caps              every Capability ever minted, redacted
     /audit [n]         the last n core events
     /messages [n]      the last n routed Messages
@@ -195,6 +196,8 @@ def _mint(
     label: str,
     holder: str,
     then: Callable[[UnitContext, Capability], None],
+    *,
+    permanent: bool = False,
 ) -> None:
     """Ask the core for one narrow token, then continue when it arrives.
 
@@ -203,6 +206,10 @@ def _mint(
     step it happened at and the reason it was given. Post-seal the core cannot
     mint without that token, which is what makes the Console's GRANT the single
     place intent-time authority enters the system.
+
+    `permanent` is off by default: intent-time authority expires. It is set only
+    for standing infrastructure a Unit needs for its whole life — a reply channel
+    — which mirrors the permanent scoped tokens bootstrap grants the boot Units.
     """
     grant = ctx.hold(Right.GRANT, target)
     if grant is None:
@@ -216,7 +223,7 @@ def _mint(
             "rights": [r.value for r in rights],
             "target": target,
             "holder": holder,
-            "expires_in": _lifetime(ctx),
+            "expires_in": None if permanent else _lifetime(ctx),
             "label": label,
         },
         (grant,),
@@ -454,7 +461,7 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd == "status":
         _status(ctx)
 
-    elif cmd in ("units", "caps", "audit", "messages", "powers"):
+    elif cmd in ("units", "caps", "audit", "messages", "powers", "agents"):
         _inspect_core(ctx, cmd, rest)
 
     elif cmd == "log":
@@ -488,7 +495,10 @@ def _command(ctx: UnitContext, text: str) -> None:
             _propose(
                 ctx,
                 f"spawn {kind} {name}",
-                [f"SPAWN on the namespace, granted to me, expires in {_lifetime(ctx)} steps"],
+                [
+                    f"SPAWN on the namespace, granted to me, expires in {_lifetime(ctx)} steps",
+                    f"SEND to the console, granted to {name}, so it can answer me (permanent, revocable)",
+                ],
                 {"op": "spawn", "kind": kind, "name": name, "entry": entry, "params": {}},
             )
 
@@ -1032,6 +1042,32 @@ def _run_spawn(ctx: UnitContext, action: dict) -> None:
     _mint(ctx, (Right.SPAWN,), None, f"console: spawn {action['name']}", ctx.id, armed)
 
 
+def _endow_reply_channel(ctx: UnitContext, unit_id: str, name: str) -> None:
+    """Hand a freshly spawned Unit a scoped SEND token back to the Console.
+
+    A Unit born at runtime holds nothing. The first time it answers a
+    request/reply Message — `/agent <name> start`, say — its `respond` presents
+    no SEND Capability reaching the Console, the core refuses to route it, and the
+    Unit is contained for capability abuse: spawning it and then asking it a
+    question would kill it. The Console already holds namespace SEND, so minting a
+    SEND scoped to *itself* and handing it to the newborn only attenuates
+    authority the Console already has. It is granted through GRANT, named in the
+    audit trail, and revocable by the Guardian — the same standing reply channel
+    bootstrap gives the demo Units ("{kind}: SEND -> console"). Permanent because
+    it is infrastructure for the Unit's whole life, not intent-time authority for
+    one action; a reply channel that expired would strand the Unit mid-lifecycle.
+    """
+    _mint(
+        ctx,
+        (Right.SEND,),
+        ctx.id,
+        f"console: reply channel for {name}",
+        unit_id,
+        lambda c, _cap: _say(c, f"{name} can now answer me (SEND scoped to the console)."),
+        permanent=True,
+    )
+
+
 def _core_result(ctx: UnitContext, reply: Message, action: dict) -> None:
     p = reply.payload or {}
     if reply.verb != f"{action['verb']}.result":
@@ -1043,6 +1079,7 @@ def _core_result(ctx: UnitContext, reply: Message, action: dict) -> None:
         if unit_id and name:
             _set_focus(ctx, unit_id, name)
             _say(ctx, f"'this' and 'it' now refer to {name} ({mask(unit_id)}).")
+            _endow_reply_channel(ctx, unit_id, name)
     _say(ctx, f"{action['name']} {action['done']}.")
 
 
