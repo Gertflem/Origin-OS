@@ -66,6 +66,11 @@ def _freeze(nucleus, msg, p: dict) -> dict:
 
 
 def _mint(nucleus, msg, p: dict) -> dict:
+    # `target_kind` must be forwarded. Omitting it meant a kind-scoped GRANT was
+    # validated against target_kind=None and failed closed, so the only path a
+    # delegate can actually use -- a Message to the core -- could not spend a
+    # kind-scoped grant at all. The in-process delegation tests never touched this
+    # verb, which is how the gap survived.
     new = nucleus.mint(
         [Right(r) for r in p["rights"]],
         p.get("target"),
@@ -74,6 +79,7 @@ def _mint(nucleus, msg, p: dict) -> dict:
         expires_in=p.get("expires_in"),
         label=p.get("label", ""),
         authority=msg.caps[0] if msg.caps else None,
+        target_kind=p.get("target_kind"),
     )
     return {"cap": str(new), "cap_id": new.cap_id}
 

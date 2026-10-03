@@ -45,8 +45,19 @@ def _tick_retention(ctx: UnitContext) -> None:
     this Unit neither decides policy nor carries the authority to enforce it.
     """
     retention = ctx.mem.get("params", {}).get("services", {}).get("retention")
-    if retention:
-        ctx.send(retention, "retention.tick", {"source": "append"})
+    if not retention:
+        return
+    # Not on every append. Ticking per write made each append trigger a store-wide
+    # sweep, so the cost of one write was O(total versions in the store) -- quadratic
+    # over a session, measured by the adversarial review at 60 appends producing 113
+    # versions. Throttling here rather than in the Retention Unit, because this is
+    # the side that knows how often appends are actually happening.
+    last = ctx.mem.get("last_retention_tick", -10**9)
+    every = int(ctx.mem.get("params", {}).get("retention_tick_every", 16))
+    if ctx.step - last < max(1, every):
+        return
+    ctx.mem["last_retention_tick"] = ctx.step
+    ctx.send(retention, "retention.tick", {"source": "append"})
 
 
 @unit_type("object_store")

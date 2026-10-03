@@ -290,6 +290,12 @@ def boot(
     # Merge, do not replace: this Unit's retention policy was set when it spawned
     # and overwriting params here would silently reset it to the defaults.
     retention.arena["params"]["services"] = dict(all_services)
+    # The Retention Unit validates `retention.configure` against the caller's PIN,
+    # so it needs the injected validator. Same trap as the Studio's: a Unit whose
+    # verb path reads ctx.mem["validator"] without one is contained by its own
+    # public command, and the failure surfaces as a containment event rather than as
+    # anything that points at the missing dependency.
+    retention.arena["validator"] = nucleus.validate
     studio.arena["params"] = {"services": dict(all_services)}
     # The Studio answers `studio.report`, which validates the requester's AUDIT
     # token through the injected validator. Without this the verb raises KeyError
@@ -342,6 +348,7 @@ def boot(
     # no AUDIT (it need not inspect), no GRANT or REVOKE (it cannot widen or withdraw
     # authority), no KILL, and no SPAWN. The narrowest grant that lets the policy run.
     grant((Right.PIN,), None, retention_id, "retention: namespace PIN")
+    grant((Right.SEND,), HUMAN, retention_id, "retention: SEND -> human")
     grant((Right.SEND,), object_store_id, retention_id, "retention: SEND -> object_store")
     grant((Right.SEND,), console_id, retention_id, "retention: SEND -> console")
 

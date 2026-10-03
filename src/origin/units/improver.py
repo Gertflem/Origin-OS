@@ -173,7 +173,15 @@ def improver_handler(ctx: UnitContext, msg: Message) -> None:
     elif msg.verb == "improve.report":
         _handle_report(ctx, msg, log, attempts)
     elif msg.verb == "nucleus.sealed":
-        log.append({"event": "sealed", "at_step": ctx.step})
+        # Only the core may announce a seal. See watcher.py for why the same check
+        # exists in both places: the answer to "did this really happen?" should never
+        # depend on who was asking.
+        if msg.sender == NUCLEUS:
+            log.append({"event": "sealed", "at_step": ctx.step})
+        else:
+            log.append(
+                {"event": "spoofed_seal_rejected", "at_step": ctx.step, "source": msg.sender}
+            )
     elif not is_answer(msg.verb):
         ctx.respond(msg, "improve.error", {"reason": f"unknown verb {msg.verb!r}"})
 

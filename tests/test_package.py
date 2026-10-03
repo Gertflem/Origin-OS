@@ -1280,6 +1280,414 @@ class TestReviewFindings(unittest.TestCase):
             self.assertEqual(reopened.read("human", "obj_legacy", cap).payload, {"t": 0})
 
 
+class TestSecondReviewFindings(unittest.TestCase):
+    """Regressions for the second adversarial review (VERIFY_BRIEF.md).
+
+    Each test attacks one of the fixes from the first review, because a fix whose
+    test only covers the case the author tried is not a fix.
+    """
+
+    # --- finding 1: malformed shape crashed the boot ------------------------
+
+    def test_a_structurally_invalid_snapshot_is_quarantined_not_crashed(self):
+        """Valid JSON is not a valid snapshot.
+
+        A missing `kind`, a missing `payload`, or a top level that is not a dict all
+        used to raise out of the constructor, wedging every subsequent boot with the
+        bad file still in place and `.bak` never consulted.
+        """
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cases = {
+            "missing kind": {"obj_x": {"created_step": 0, "versions": []}},
+            "missing payload": {"obj_x": {"kind": "photo", "created_step": 0,
+                                          "versions": [{"seq": 0, "author": "a", "step": 0}]}},
+            "top level is a list": ["not", "a", "dict"],
+            "versions is not a list": {"obj_x": {"kind": "photo", "versions": "nope"}},
+        }
+        for label, data in cases.items():
+            with self.subTest(shape=label), tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "objects.json"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                store = ObjectStore(validator, storage_path=path)  # must not raise
+                self.assertIn("snapshot.malformed", [e["kind"] for e in store.recovery_events])
+
+    def test_a_malformed_main_falls_back_to_a_healthy_backup(self):
+        """Quarantine plus fallback: the durable data must actually come back."""
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-malformed")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "photo", {"t": 0}, cap, step=1)
+            (Path(tmpdir) / "objects.json.bak").write_text(
+                path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            path.write_text(json.dumps({"obj_x": {"versions": []}}), encoding="utf-8")
+
+            recovered = ObjectStore(validator, storage_path=path)
+            self.assertEqual(recovered.read("human", obj.object_id, cap).payload, {"t": 0})
+            kinds = [e["kind"] for e in recovered.recovery_events]
+            self.assertIn("snapshot.quarantined", kinds)
+            self.assertIn("snapshot.restored_from_backup", kinds)
+
+    # --- finding 2: object-level fields were not covered by any digest ------
+
+    def test_tampering_an_object_level_field_is_reported(self):
+        """Version digests cannot see a moved pointer or a relabelled kind.
+
+        Moving `preferred` leaves every version byte-identical, so the load was clean
+        while `effective()` returned something else to every consumer. `kind` matters
+        just as much: the kind-scoped authority layer reads it straight from the file.
+        """
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-objdigest")
+
+        tampers = {
+            "preferred moved": lambda o: o.__setitem__("preferred", 0),
+            "kind relabelled": lambda o: o.__setitem__("kind", "code"),
+            "pins added": lambda o: o.__setitem__("pins", [0]),
+            "compacted inflated": lambda o: o.__setitem__("compacted", [0, 1, 2]),
+        }
+        for label, mutate in tampers.items():
+            with self.subTest(tamper=label), tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "objects.json"
+                store = ObjectStore(validator, storage_path=path)
+                obj = store.create("human", "photo", {"t": 0}, cap, step=1)
+                store.append("human", obj.object_id, {"t": 1}, cap, step=2)
+                data = json.loads(path.read_text(encoding="utf-8"))
+                mutate(data[obj.object_id])
+                path.write_text(json.dumps(data), encoding="utf-8")
+
+                reopened = ObjectStore(validator, storage_path=path)
+                kinds = [d["kind"] for d in reopened.history_damage]
+                self.assertIn("history.object_digest_mismatch", kinds,
+                              f"{label} loaded clean: {reopened.history_damage}")
+
+    def test_object_digest_does_not_fire_on_ordinary_operations(self):
+        """The false-positive direction, which matters as much as catching tampering.
+
+        A digest that reports damage on an innocent snapshot is worse than none: it
+        trains the operator to ignore the check. Pinning, preferring and compacting
+        all change the covered fields legitimately.
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-clean-digest")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "journal", {"t": 0}, cap, step=1)
+            for t in range(1, 9):
+                store.append("human", obj.object_id, {"t": t}, cap, step=t + 1)
+            store.pin("human", obj.object_id, 1, cap)
+            store.prefer("human", obj.object_id, 3, cap)
+            store.compact("human", obj.object_id, cap, keep_recent=3)
+
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.history_damage, [], reopened.history_damage)
+
+    def test_a_snapshot_predating_object_digests_is_not_called_damaged(self):
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-legacy-obj")
+        legacy = {
+            "obj_legacy": {
+                "kind": "journal", "created_step": 0,
+                "versions": [{"seq": 0, "payload": {"t": 0}, "author": "human",
+                              "step": 0, "note": "genesis", "acked": True}],
+                "pins": [], "compacted": [], "preferred": None,
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertEqual(reopened.history_damage, [])
+            self.assertEqual(reopened.read("human", "obj_legacy", cap).payload, {"t": 0})
+
+    # --- finding 3: the mint verb dropped target_kind -----------------------
+
+    def test_a_kind_scoped_grant_can_be_spent_through_the_wire(self):
+        """The Message path is the only path a Unit has, and it dropped `target_kind`.
+
+        So a delegate holding a code-scoped GRANT was validated against
+        target_kind=None, failed closed, and could not delegate at all -- making the
+        documented delegation story false as shipped. The in-process test missed it
+        because it called nucleus.mint directly.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+        from origin.core.ids import HUMAN, NUCLEUS
+        from origin.message import Message
+
+        system = boot()
+        delegate = system.services["console"]
+        grant = system.nucleus.mint((Right.GRANT,), None, HUMAN, delegate,
+                                    authority=system.guardian, target_kind="code")
+        send = system.nucleus.find_capability(delegate, Right.SEND, NUCLEUS)
+        self.assertIsNotNone(send)
+
+        system.nucleus.send_message(
+            Message(delegate, NUCLEUS, "mint",
+                    {"rights": ["read"], "target": None, "holder": delegate,
+                     "expires_in": 5, "label": "probe", "target_kind": "code"},
+                    caps=(grant, send))
+        )
+        system.nucleus.schedule()
+
+        # The token must exist and be kind-scoped, i.e. the grant really was spendable.
+        scoped = [r for r in system.nucleus._caps.values()
+                  if r.label == "probe" and Right.READ in r.rights]
+        self.assertTrue(scoped, "the delegate could not spend its kind-scoped GRANT")
+        self.assertEqual(scoped[-1].target_kind, "code")
+
+    def test_the_wire_cannot_widen_a_kind_scoped_grant(self):
+        """The same request with no kind scope must still be refused."""
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+        from origin.core.ids import HUMAN, NUCLEUS
+        from origin.message import Message
+
+        system = boot()
+        delegate = system.services["console"]
+        grant = system.nucleus.mint((Right.GRANT,), None, HUMAN, delegate,
+                                    authority=system.guardian, target_kind="code")
+        send = system.nucleus.find_capability(delegate, Right.SEND, NUCLEUS)
+        system.nucleus.send_message(
+            Message(delegate, NUCLEUS, "mint",
+                    {"rights": ["read"], "target": None, "holder": delegate,
+                     "expires_in": 5, "label": "widened", "target_kind": None},
+                    caps=(grant, send))
+        )
+        system.nucleus.schedule()
+        self.assertFalse([r for r in system.nucleus._caps.values() if r.label == "widened"])
+
+    # --- finding 4: silent tmp promotion ------------------------------------
+
+    def test_promoting_a_tmp_snapshot_is_reported(self):
+        """A crash during fsync leaves a complete `.tmp` that comes back to life.
+
+        Promoting it silently meant a version the caller was told had failed was
+        acknowledged on the next boot with recovery_events == [].
+        """
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-tmp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "journal", {"t": 0}, cap, step=1)
+
+            # Simulate a crash mid-write: a complete, newer tmp beside main.
+            data = json.loads(path.read_text(encoding="utf-8"))
+            obj_item = data[obj.object_id]
+            obj_item["versions"].append(
+                {"seq": 1, "payload": {"t": 1}, "author": "human", "step": 2,
+                 "note": "in flight", "acked": True}
+            )
+            tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+            tmp_path.write_text(json.dumps(data), encoding="utf-8")
+
+            reopened = ObjectStore(validator, storage_path=path)
+            self.assertIn("snapshot.tmp_promoted", [e["kind"] for e in reopened.recovery_events])
+
+    # --- finding 5: ctypes handle truncation -------------------------------
+
+    def test_windows_handle_calls_declare_their_signatures(self):
+        """ctypes defaults an undeclared argument to c_int, which truncates a 64-bit handle.
+
+        Only CreateFileW was declared, so a large handle was flushed as a different
+        small integer and closed as another -- in the exact code path that makes the
+        rename durable. It went unnoticed because handle values on a lightly-loaded
+        machine happen to be small.
+        """
+        import ctypes
+        from unittest.mock import patch
+        import origin.core.objects as objmod
+
+        if objmod.os.name != "nt":
+            self.skipTest("Windows-only ctypes path")
+        # `ctypes` is imported inside the function under test, so patch the module
+        # attribute on `ctypes` itself rather than on `objects`.
+
+        # Drive the real function with a handle value that does not survive c_int.
+        big = 0x1_0000_5678
+        seen = {}
+
+        class FakeKernel:
+            def __getattr__(self, name):
+                if name == "CreateFileW":
+                    return lambda *a: big
+                if name == "FlushFileBuffers":
+                    return lambda handle: seen.__setitem__("flushed", handle) or True
+                if name == "CloseHandle":
+                    return lambda handle: seen.__setitem__("closed", handle) or True
+                return lambda *a: True
+
+        with patch.object(ctypes, "WinDLL", lambda *a, **k: FakeKernel()), \
+                patch.object(ctypes, "WinError", lambda *a: OSError("fake")), \
+                patch.object(ctypes, "get_last_error", lambda: 0):
+            objmod._flush_directory_windows(Path("C:/does-not-need-to-exist"))
+
+        self.assertEqual(seen.get("flushed"), big, "the handle was truncated before FlushFileBuffers")
+        self.assertEqual(seen.get("closed"), big, "the handle was truncated before CloseHandle")
+        self.assertNotEqual(ctypes.c_int(big).value, big,
+                            "this test is only meaningful if the value does not fit in c_int")
+
+    # --- finding 6: forged nucleus.sealed ---------------------------------
+
+    def test_a_forged_seal_is_rejected_everywhere_it_is_believed(self):
+        """Same class as a forged containment: a Unit asserting a system fact.
+
+        Left unfixed, any Unit could tell the human the core had sealed, and the
+        Watcher and Improver would record it.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+        from origin.core.ids import NUCLEUS
+        from origin.message import Message
+
+        system = boot()
+        watcher = system.services["watcher"]
+        improver = system.services["improver"]
+        console = system.services["console"]
+
+        # Use a spoofer that genuinely holds SEND to all three, and assert that first
+        # -- a forgery test that cannot send proves nothing.
+        spoofer = system.services["object_store"]
+        for target in (watcher, improver, console):
+            self.assertIsNotNone(
+                system.nucleus.find_capability(spoofer, Right.SEND, target),
+                f"the spoofer cannot even reach {target}, so this test proves nothing",
+            )
+            system.nucleus.send_message(Message(spoofer, target, "nucleus.sealed", {}))
+        system.nucleus.schedule()
+
+        # Count rather than test presence: boot legitimately seals the core, so the
+        # Watcher has already recorded one real `sealed` before the forgery. What
+        # matters is that the forged one added a *second*.
+        watcher_events = [e.get("event") for e in system.nucleus._arenas[watcher]["events"]]
+        improver_log = [e.get("event") for e in system.nucleus._arenas[improver]["log"]]
+        self.assertEqual(watcher_events.count("sealed"), 1,
+                         f"the Watcher believed a forged seal: {watcher_events}")
+        self.assertEqual(improver_log.count("sealed"), 1,
+                         f"the Improver believed a forged seal: {improver_log}")
+        self.assertIn("spoofed_seal_rejected", watcher_events)
+
+        said = " ".join(
+            str(e["payload"]) for e in system.nucleus.drain_output()
+            if e["verb"] == "console.output"
+        )
+        self.assertNotIn("has sealed itself", said)
+
+        # And the genuine seal still lands, from the core.
+        system.nucleus.send_message(Message(NUCLEUS, watcher, "nucleus.sealed", {}))
+        system.nucleus.schedule()
+        self.assertIn("sealed", [e.get("event") for e in system.nucleus._arenas[watcher]["events"]])
+
+    # --- finding 7: retention.configure was ungated ------------------------
+
+    def test_configuring_retention_requires_pin(self):
+        """Retention policy is a human decision, so changing it needs the same PIN.
+
+        Without the gate, any principal that could address the Unit could set
+        min_versions=0 and have the next append trigger a near-total compaction under
+        the Retention Unit's own token.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        retention = system.services["retention"]
+        before = dict(system.nucleus._arenas[retention]["params"])
+
+        # No Capability at all.
+        system.nucleus.send_message(
+            Message(system.services["object_store"], retention, "retention.configure",
+                    {"min_versions": 0, "keep_recent": 1})
+        )
+        system.nucleus.schedule()
+        after = system.nucleus._arenas[retention]["params"]
+        self.assertEqual(after["min_versions"], before["min_versions"],
+                         "an unvalidated request changed the policy")
+        self.assertEqual(after["keep_recent"], before["keep_recent"])
+
+    def test_the_human_can_still_configure_retention_with_a_pin(self):
+        """Otherwise the gate would just make the verb unusable."""
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        retention = system.services["retention"]
+        pin = system.nucleus.mint((Right.PIN,), None, HUMAN, HUMAN, authority=system.guardian)
+        # Find the human's existing SEND rather than minting another: minting one
+        # scoped to the Retention Unit works, but using the standing token is what a
+        # real operator would do, and it is a stronger check that the Unit is
+        # reachable through the grants it already has.
+        send = system.nucleus.find_capability(HUMAN, Right.SEND, retention)
+        self.assertIsNotNone(send, "the human must be able to address the Retention Unit")
+
+        system.nucleus.send_message(
+            Message(HUMAN, retention, "retention.configure", {"min_versions": 7}, caps=(send, pin))
+        )
+        system.nucleus.schedule()
+
+        self.assertEqual(system.nucleus._arenas[retention]["params"]["min_versions"], 7)
+        self.assertEqual(system.nucleus._units[retention].crashes, 0,
+                         "a valid configure must not contain the Unit")
+
+    # --- finding 8: retention growth is bounded per tick -------------------
+
+    def test_retention_does_not_sweep_on_every_append(self):
+        """Per-append ticking made one write cost O(total versions in the store).
+
+        The review measured 60 appends producing 113 versions and 25 KB of snapshot
+        for a 40-byte live payload. Live payloads must stay bounded regardless of how
+        often writes arrive.
+        """
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot(retention_min_versions=5, retention_keep_recent=2)
+        store_id = system.services["object_store"]
+        for t in range(1, 61):
+            system.nucleus.send_message(
+                Message(HUMAN, store_id, "object.append",
+                        {"object_id": TALLY, "payload": {"count": t}}, caps=(system.guardian,))
+            )
+            system.nucleus.schedule()
+
+        obj = system.store._objects[TALLY]
+        live = [v for v in obj.versions if v.seq not in obj.compacted]
+        # Bounded by the retention window, not by the number of writes.
+        self.assertLess(len(live), 20, f"live payloads grew to {len(live)}")
+        self.assertEqual(system.store.read(HUMAN, TALLY, system.guardian).payload, {"count": 60})
+
+
 class TestVersionedIntents(unittest.TestCase):
     """Phase 3: history, undo and restore, reachable by plain language.
 
@@ -1650,7 +2058,15 @@ class TestVersionedIntents(unittest.TestCase):
             bak.write_text(json.dumps(older))
             path.write_text(json.dumps(damaged))
             kept = ObjectStore(validator, storage_path=path)
-            self.assertEqual([d["kind"] for d in kept.history_damage], ["history.seq_gap"])
+            # The seq gap is the finding this case is about. The object digest also
+            # fires, because the file was edited after it was written and losing a
+            # version changes the seq list it covers -- same fact, second witness.
+            kinds = [d["kind"] for d in kept.history_damage]
+            self.assertIn("history.seq_gap", kinds)
+            self.assertEqual(
+                len([d for d in kept.history_damage if d["kind"] == "history.seq_gap"]), 1,
+                "falling back was correctly refused, so the gap must still be reported once",
+            )
             self.assertEqual(kept.read("alice", obj.object_id, cap).payload, {"t": 2})
 
     def test_object_store_detects_history_damage_on_load(self):
@@ -1675,7 +2091,16 @@ class TestVersionedIntents(unittest.TestCase):
 
             damaged = ObjectStore(validator, storage_path=path)
             kinds = sorted(d["kind"] for d in damaged.history_damage)
-            self.assertEqual(kinds, ["history.dangling_pointer", "history.seq_gap"])
+            # The two structural findings this test is about. Losing a version and
+            # pointing a pin at nothing are both detectable without any digest.
+            self.assertIn("history.seq_gap", kinds)
+            self.assertIn("history.dangling_pointer", kinds)
+            # The file was also edited after it was written, so the object-level
+            # digest catches that too -- losing a version changes the seq list, and
+            # a new pin changes the pointer set. Asserted separately rather than
+            # folded into the equality, so this test keeps testing what it was
+            # written to test if the digest machinery changes again.
+            self.assertIn("history.object_digest_mismatch", kinds)
             self.assertIn("history.damaged", [e["kind"] for e in damaged.recovery_events])
 
     def test_object_store_reports_recovery_events(self):

@@ -299,6 +299,16 @@ def console_handler(ctx: UnitContext, msg: Message) -> None:
         return
 
     if msg.verb == "nucleus.sealed":
+        # Only the core announces a seal. This is the one message the human reads as
+        # a statement about the whole system, so a forged one is not a cosmetic lie:
+        # it tells the operator the core is sealed when it may not be.
+        if msg.sender != NUCLEUS:
+            _say(
+                ctx,
+                f"IGNORED a claim from {mask(str(msg.sender))} that the Nucleus had sealed. "
+                "Only the core can report that.",
+            )
+            return
         _say(
             ctx,
             "The Nucleus has sealed itself. Its bootstrap authority is spent, not merely unused: "

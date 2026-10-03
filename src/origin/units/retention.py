@@ -158,7 +158,26 @@ def retention_handler(ctx: UnitContext, msg: Message) -> None:
         return
 
     if msg.verb == "retention.configure":
-        # The operator changing the policy through the same path that reports it.
+        # Retention policy is a human decision (section 5: authority exists only as
+        # explicit Capabilities), so configuring it needs the same namespace PIN the
+        # sweep itself requires. Without this gate any principal that could address
+        # this Unit -- console, naming, the object store all hold namespace SEND --
+        # could set min_versions=0 and have the very next append trigger a near-total
+        # compaction under *this Unit's* token. The apply flag being safe is no
+        # consolation when the policy itself can be steered by the caller.
+        pin = msg.caps[0] if msg.caps else None
+        try:
+            if pin is None:
+                raise CapabilityError("retention.configure requires a PIN Capability")
+            ctx.mem["validator"](pin, Right.PIN, None, msg.sender)
+        except CapabilityError as exc:
+            ctx.respond(
+                msg,
+                "retention.denied",
+                {"reason": str(exc), "note": "retention policy is a human decision"},
+            )
+            return
+
         p = msg.payload or {}
         changed = {}
         for key in ("enabled", "keep_recent", "min_versions", "interval"):
@@ -168,10 +187,12 @@ def retention_handler(ctx: UnitContext, msg: Message) -> None:
                     value = bool(value)
                 else:
                     value = int(value)
-                ctx.mem[key if key != "enabled" else "enabled"] = value
                 changed[key] = value
-        # keep_recent/min_versions/interval/enabled are read from params at call
-        # time in the handler above, so mirror them there for the next tick.
+        # Keep_recent/min_versions/interval/enabled are read from `params` at the top
+        # of the handler on every invocation, so writing them anywhere else has no
+        # effect -- the previous version also wrote ctx.mem[key], which set an arena
+        # key nothing ever read. So a configure appeared to succeed and changed
+        # nothing. Updating params is what actually moves the policy.
         ctx.mem["params"].update(changed)
         _record(log, {"event": "reconfigured", "at_step": ctx.step, "changes": changed})
         if msg.reply_to is not None:

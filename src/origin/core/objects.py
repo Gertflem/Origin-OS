@@ -117,6 +117,10 @@ class Object:
     #: Seqs whose payload has been reclaimed. Metadata is retained forever.
     compacted: set[int] = field(default_factory=set)
     preferred: Optional[int] = None
+    #: The `object_digest` recorded in the snapshot this Object was loaded from, if
+    #: any. Evidence only -- it is what `_damage_of` compares against, and `None`
+    #: means the file predates object-level digests.
+    stored_object_digest: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Section 11: true ephemeral Objects are forbidden at the foundation.
@@ -227,6 +231,37 @@ def version_digest(version: "Version") -> str:
     return hashlib.blake2b(encoded, key=_VERSION_DIGEST_KEY, digest_size=16).hexdigest()
 
 
+#: Object-level fields that decide what every consumer reads as current state.
+#:
+#: `kind` is here because it is not cosmetic: the kind-scoped authority layer reads
+#: it straight from the file, so relabelling a data Object as `code` would hand a
+#: delegate write authority over it. A digest that ignored this left that reachable.
+_OBJECT_DIGEST_FIELDS = ("kind", "created_step", "pins", "compacted", "preferred")
+
+
+def object_digest(obj: "Object") -> str:
+    """A digest of an Object's own fields, separate from its versions'.
+
+    Version digests say "no version was altered in place". They cannot say "the
+    pointer at the current state was moved", because moving `preferred` leaves every
+    version byte-identical -- a rewrite that loads perfectly clean and silently
+    changes what `effective()` returns to everyone.
+    """
+    encoded = json.dumps(
+        {
+            "kind": obj.kind,
+            "created_step": obj.created_step,
+            "pins": sorted(obj.pins),
+            "compacted": sorted(obj.compacted),
+            "preferred": obj.preferred,
+            "version_seqs": [v.seq for v in obj.versions],
+        },
+        sort_keys=True,
+        default=_json_default,
+    ).encode("utf-8")
+    return hashlib.blake2b(encoded, key=_VERSION_DIGEST_KEY, digest_size=16).hexdigest()
+
+
 # --- Durable rename -----------------------------------------------------------
 #
 # `os.replace` is atomic, but atomic is not the same as durable. The rename that
@@ -268,6 +303,24 @@ def _flush_directory_windows(path: Path) -> None:
     ]
     create_file.restype = wintypes.HANDLE
 
+    # Every HANDLE-taking call needs its own signature. ctypes defaults an
+    # undeclared argument to `c_int`, which is 32 bits: a 64-bit handle value is
+    # silently truncated before it reaches the API. With only CreateFileW declared,
+    # a large handle was flushed as a different (small) integer and closed as
+    # another -- so the flush could act on the wrong open object or leak, in the
+    # exact code path that exists to make the rename durable.
+    #
+    # This went unnoticed because handle values on a lightly-loaded machine happen
+    # to be small, so the truncation was a no-op. It is not a no-op in general, and
+    # "works on my machine" is not a durability argument.
+    flush_file_buffers = kernel32.FlushFileBuffers
+    flush_file_buffers.argtypes = [wintypes.HANDLE]
+    flush_file_buffers.restype = wintypes.BOOL
+
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
     # FlushFileBuffers needs GENERIC_WRITE, which is why this cannot be a plain read handle.
     handle = create_file(
         str(path),
@@ -282,10 +335,10 @@ def _flush_directory_windows(path: Path) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
     try:
-        if not kernel32.FlushFileBuffers(handle):
+        if not flush_file_buffers(handle):
             raise ctypes.WinError(ctypes.get_last_error())
     finally:
-        kernel32.CloseHandle(handle)
+        close_handle(handle)
 
 
 def _flush_directory(path: Path) -> None:
@@ -347,6 +400,10 @@ class ObjectStore:
                 "pins": sorted(obj.pins),
                 "compacted": sorted(obj.compacted),
                 "preferred": obj.preferred,
+                # Object-level digest, because these four fields decide what every
+                # consumer reads as current state and no version digest can see them
+                # change. Written last so it covers the fields above.
+                "object_digest": object_digest(obj),
             }
             for object_id, obj in self._objects.items()
         }
@@ -473,9 +530,29 @@ class ObjectStore:
                 if not candidate.exists() or tmp.stat().st_mtime_ns >= candidate.stat().st_mtime_ns:
                     os.replace(tmp, candidate)
                     promoted = True
+                    # Promoting a temp file is a recovery the operator must be told
+                    # about. A crash during fsync leaves a complete `.tmp` behind,
+                    # and without this the write comes back to life with no recovery
+                    # event at all -- so a version the caller was told failed is
+                    # silently acknowledged on the next boot.
+                    self.recovery_events.append(
+                        {"kind": "snapshot.tmp_promoted", "file": tmp.name}
+                    )
                 else:
+                    # A valid but older `.tmp` is a recovery candidate, not rubbish.
+                    # It was being deleted here, before main was even examined, which
+                    # threw away a snapshot that was newer than `.bak` and would
+                    # have healed a corrupt main outright. Keep it as `.bak` when
+                    # there is no backup, or when this one is newer.
                     try:
-                        tmp.unlink(missing_ok=True)
+                        if (not self._backup_path().exists()
+                                or tmp.stat().st_mtime_ns >= self._backup_path().stat().st_mtime_ns):
+                            os.replace(tmp, self._backup_path())
+                            self.recovery_events.append(
+                                {"kind": "snapshot.stale_tmp_kept_as_backup", "file": tmp.name}
+                            )
+                        else:
+                            tmp.unlink(missing_ok=True)
                     except OSError:
                         pass
             else:
@@ -502,7 +579,33 @@ class ObjectStore:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-        self._objects = self._build(payload)
+        # Building the Objects is where malformed *shape* surfaces -- a missing
+        # `kind`, a missing `payload`, a top level that is a list. Parsing alone
+        # does not catch those, and letting the exception escape would wedge every
+        # subsequent boot with the bad file still sitting there, stranding `.bak`
+        # that could have healed it. "Damaged history is evidence" has to include
+        # "evidence is recoverable from".
+        try:
+            self._objects = self._build(payload)
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            self._quarantine()
+            self.recovery_events.append(
+                {"kind": "snapshot.malformed", "detail": f"{type(exc).__name__}: {exc}"}
+            )
+            backup = _load_json(self._backup_path())
+            try:
+                self._objects = self._build(backup) if backup else {}
+            except (KeyError, TypeError, AttributeError, ValueError) as exc2:
+                self._objects = {}
+                self.recovery_events.append(
+                    {"kind": "snapshot.unrecoverable", "detail": f"backup: {type(exc2).__name__}: {exc2}"}
+                )
+            else:
+                if backup:
+                    self.recovery_events.append({"kind": "snapshot.restored_from_backup"})
+            self._audit_history()
+            return
+
         self._audit_history()
         if self.history_damage and self._backup_is_safe_superset():
             # The backup holds every version main holds and is itself clean:
@@ -536,6 +639,7 @@ class ObjectStore:
             ]
             obj.pins = set(item.get("pins", []))
             obj.compacted = set(item.get("compacted", []))
+            obj.stored_object_digest = item.get("object_digest")
             obj.preferred = item.get("preferred")
             objects[object_id] = obj
         return objects
@@ -582,6 +686,12 @@ class ObjectStore:
                 damage.append(
                     {"kind": "history.payload_digest_mismatch", "object": object_id, "seqs": mismatched}
                 )
+            # Object-level integrity. Moving `preferred` or relabelling `kind`
+            # leaves every version byte-identical, so no version digest can see it --
+            # yet `preferred` decides what `effective()` returns to every consumer
+            # and `kind` decides what the authority layer will accept.
+            if obj.stored_object_digest is not None and obj.stored_object_digest != object_digest(obj):
+                damage.append({"kind": "history.object_digest_mismatch", "object": object_id})
         return damage
 
     def _audit_history(self) -> None:

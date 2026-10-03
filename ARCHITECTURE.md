@@ -287,8 +287,14 @@ and stripped of authority, not sandboxed.
 - Version metadata still accumulates on append-heavy Objects. Every sweep appends
   a marker version naming what it reclaimed, which invariant 7 requires, so an
   Object written in a tight loop grows its version list faster than an unwatched
-  one. Payloads stay bounded, which is the point; `min_versions` is the knob that
-  controls how often this happens.
+  one. Measured, not estimated: 60 appends to one Object leave 65 version slots of
+  which 52 are compacted markers, holding 13 live payloads. Payloads stay bounded,
+  which is the point; the slots do not, and each marker's note embeds the reclaimed
+  seq list. `min_versions` controls how often a sweep runs, and the store now ticks
+  retention every 16 appends rather than every one — the review measured per-append
+  ticking at 25 KB of snapshot for a 40-byte live payload, and it made the cost of a
+  single write O(total versions in the store). A cap on version slots per Object
+  would bound this properly; that is real work, not a knob.
 - The Console, the Naming Unit and the Object store are protected from
   self-improvement by `PROTECTED_KINDS` rather than by authority. That list is
   policy in an ordinary Unit, so it is only as trustworthy as the Unit holding

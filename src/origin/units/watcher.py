@@ -206,6 +206,15 @@ def watcher_handler(ctx: UnitContext, msg: Message) -> None:
         return
 
     if msg.verb == "nucleus.sealed":
+        # Same rule as unit.contained: only the core announces that it sealed.
+        # Forging this costs no authority today, but it is the same class of lie --
+        # a Unit asserting a system fact it did not observe -- and the Watcher's log
+        # is exactly what an operator consults after something goes wrong.
+        if msg.sender != NUCLEUS:
+            events.append(
+                {"event": "spoofed_seal_rejected", "at_step": ctx.step, "source": msg.sender}
+            )
+            return
         events.append({"event": "sealed", "at_step": ctx.step})
         return
 
