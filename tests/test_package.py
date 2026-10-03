@@ -228,15 +228,77 @@ class TestPackage(unittest.TestCase):
 
         A directory flush used to be wrapped in `except OSError: pass`. On
         Windows `os.open(dir)` always raises PermissionError, so the guarantee
-        was silently absent on the platform the project actually runs on. This
-        test fails if the flush degrades into a no-op again.
+        was silently absent on the platform the project actually runs on.
+
+        Asserting only "does not raise" is what let a second regression hide here:
+        stray lines from another function were left in `_flush_directory`, which
+        the Windows early-return masked and which raised `NameError` on POSIX.
+        So this asserts the syscall actually happened, on both platform branches.
         """
+        from unittest.mock import patch
         import origin.core.objects as objmod
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "sentinel.txt"
             target.write_text("durable", encoding="utf-8")
             objmod._flush_directory(Path(tmpdir))  # must not raise on any platform
+
+        # The POSIX branch cannot run natively on Windows, so drive it with the
+        # directory primitives supplied. This is the branch that was silently
+        # broken and is the one that has never been exercised on the author's
+        # machine.
+        calls: list[tuple] = []
+        with patch.object(objmod.os, "open", lambda *a: 42), \
+                patch.object(objmod.os, "fsync", lambda fd: calls.append(("fsync", fd))), \
+                patch.object(objmod.os, "close", lambda fd: calls.append(("close", fd))), \
+                patch.object(objmod.os, "name", "posix"):
+            objmod._flush_directory(Path("/tmp/does-not-need-to-exist"))
+
+        self.assertIn(("fsync", 42), calls, "the POSIX branch must actually fsync the directory")
+        self.assertIn(("close", 42), calls, "the directory handle must be closed, or it leaks")
+
+    def test_json_default_never_silently_returns_none(self):
+        """A payload the encoder cannot handle must not be written as null.
+
+        `_json_default` is `json.dump`'s last resort. Returning None there makes
+        the snapshot disagree with memory: the version was acknowledged as durable,
+        the caller was told so, and the file on disk says `null`. That is the exact
+        failure this store exists to prevent, produced by its own plumbing.
+        """
+        import json
+        from origin.core.objects import _json_default
+
+        class Payload:
+            def __init__(self):
+                self.note = "real"
+                self.count = 7
+
+        self.assertEqual(_json_default(Payload()), {"note": "real", "count": 7})
+        self.assertEqual(_json_default({3, 1, 2}), [1, 2, 3])
+        # A bare object has no __dict__; it must still produce its repr, never None.
+        self.assertIsInstance(_json_default(object()), str)
+
+        # And end to end: a payload object survives a real write/reload cycle.
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder, target_kind=None: None
+        cap = Capability("cap-native")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            store = ObjectStore(validator, storage_path=path)
+            obj = store.create("human", "thing", {"note": Payload()}, cap, step=1)
+            reopened = ObjectStore(validator, storage_path=path)
+            payload = reopened.read("human", obj.object_id, cap).payload
+            self.assertEqual(payload, {"note": {"note": "real", "count": 7}})
+
+            # The snapshot is keyed by object id at the top level.
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            stored = on_disk[obj.object_id]["versions"][0]["payload"]
+            self.assertIsNotNone(stored["note"], "an acknowledged payload must not serialise to null")
+            # The payload object became a real dict on disk, not null. (json.dump
+            # sorts keys, so this compares parsed content rather than ordering.)
+            self.assertEqual(stored["note"], {"note": "real", "count": 7})
 
     def test_failed_directory_flush_is_reported_not_swallowed(self):
         """A weakened durability guarantee has to reach the operator.

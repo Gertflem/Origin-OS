@@ -166,8 +166,20 @@ Validator = Callable[..., Any]
 
 
 def _json_default(value: Any) -> Any:
+    """Last-resort encoder for payloads the JSON encoder cannot handle.
+
+    Returning `None` here would be a lie with teeth: `json.dump` calls this only
+    for objects it cannot serialise, emits whatever comes back, and the caller has
+    already been told the version is durable. A payload object would therefore be
+    written to the snapshot as `null` while memory held the real thing, which is
+    precisely the failure this store exists to prevent. So this must always return
+    something faithful, and failing loudly beats returning a plausible wrong value.
+    """
     if isinstance(value, set):
         return sorted(value)
+    if hasattr(value, "__dict__"):
+        return dict(vars(value))
+    return str(value)
 
 
 # --- Durable rename -----------------------------------------------------------
@@ -241,9 +253,6 @@ def _flush_directory(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    if hasattr(value, "__dict__"):
-        return value.__dict__
-    return str(value)
 
 
 class ObjectStore:
