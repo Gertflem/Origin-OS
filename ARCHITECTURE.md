@@ -214,7 +214,37 @@ express → resolve → propose capabilities → confirm → execute → inspect
 Every step is a Message. `confirm` mints exactly the token that was quoted,
 scoped to one Object, with an expiry — never a broader grant than was shown.
 
-## 10. Known limitations
+## 10. Trust boundaries, tested as attacks
+
+`TestAuthorityBoundaries` in the test suite is written adversarially: each test is
+an attack that must fail. A security claim is only worth what it is worth when
+someone tries to break it, and a test that exercises the happy path proves nothing.
+
+Attacks currently asserted to fail:
+
+- **Escalation.** A delegate widening its own kind-scoped GRANT back to
+  namespace-wide. Attenuation is one-directional in every scope.
+- **Reserved rights.** A non-human minting GUARDIAN, GRANT or REVOKE.
+- **Possession confused with delegation.** One principal spending another's token.
+  Without this check, any service could accumulate ambient authority as a side
+  effect of being talked to, and attaching the Guardian to a Unit-directed Message
+  would hand that Unit the human's escape hatch.
+- **Forgery.** A plausible-looking but unissued capability id.
+- **Revocation.** A stale handle saved before revocation, which must die immediately.
+- **Expiry.** A temporary token one step past its lifetime.
+- **Cross-kind inheritance.** A replacement Unit collecting a Watcher's KILL.
+- **Re-homing a running Unit.** Authority is only moved for a Unit that can no
+  longer act for itself.
+- **Unsealed minting.** The sealed core refusing to mint without a GRANT token.
+- **Silent refusal.** Every rejection reaching the audit trail, because a refusal
+  the operator cannot investigate is not much of a safeguard.
+
+What is deliberately *not* claimed: this is a single-process simulation with no
+adversary model beyond a misbehaving Unit. A hostile Unit cannot forge a handle,
+but it also cannot be isolated from the host process, so "contained" means frozen
+and stripped of authority, not sandboxed.
+
+## 11. Known limitations
 
 - A token may be scoped by Object **id**, by Object **kind**, or left
   namespace-wide, and never by anything broader than what granted it. The

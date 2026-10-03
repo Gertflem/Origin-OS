@@ -573,6 +573,218 @@ class TestPackage(unittest.TestCase):
         self.assertIn("retention", system.services)
 
 
+class TestAuthorityBoundaries(unittest.TestCase):
+    """Phase 4: the trust boundaries, asserted as behaviour rather than prose.
+
+    Each test here is an attack that must fail. They are written adversarially on
+    purpose: the value of a security claim is entirely in whether it holds when
+    someone tries to break it, and a test that only exercises the happy path proves
+    nothing about the guarantee.
+    """
+
+    def _boot(self):
+        from origin.core.bootstrap import boot, TALLY
+        return boot(), TALLY
+
+    # --- escalation ---------------------------------------------------------
+
+    def test_a_delegate_cannot_widen_its_own_grant(self):
+        """Attenuation must hold in every scope, or delegation is just a slow grant.
+
+        The Improver holds a token scoped to `code` Objects. If it could mint itself
+        an unrestricted APPEND, kind scoping would be decorative and the "cannot
+        rewrite data" guarantee would rest on the Unit's good behaviour.
+        """
+        from origin.core.capability import Capability, CapabilityError, Right
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        improver = system.services["improver"]
+        narrow = next(
+            r for r in system.nucleus._caps.values()
+            if improver in r.holders and r.target_kind == "code"
+        )
+        with self.assertRaises((CapabilityError, Exception)):
+            system.nucleus.mint(
+                (Right.READ, Right.APPEND), None, improver, improver,
+                authority=Capability(narrow.cap_id), target_kind=None,
+            )
+
+    def test_only_the_human_can_mint_reserved_rights(self):
+        """GUARDIAN, GRANT and REVOKE are authority over authority.
+
+        If a delegate could mint them, "Improvers cannot self-grant" would be a
+        policy rather than a fact, and one confused Unit could hand out permanent
+        power that the human never agreed to.
+        """
+        from origin.core.capability import Right
+        from origin.core.bootstrap import boot
+        from origin.core.constitution import InvariantViolation
+
+        system = boot()
+        for right in (Right.GUARDIAN, Right.GRANT, Right.REVOKE):
+            with self.subTest(right=right):
+                with self.assertRaises(InvariantViolation):
+                    system.nucleus.mint((right,), None, "some_unit", "some_unit",
+                                        authority=system.guardian)
+
+    # --- possession vs delegation ------------------------------------------
+
+    def test_presenting_another_principals_token_is_refused(self):
+        """Presenting a Capability must not delegate it.
+
+        Without this, any service could accumulate ambient authority as a side
+        effect of being talked to, and attaching the Guardian to a Unit-directed
+        Message would hand that Unit the human's escape hatch.
+        """
+        from origin.core.capability import Capability, CapabilityError, Right
+        from origin.core.bootstrap import boot, TALLY
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system, tally = self._boot()
+        console = system.services["console"]
+        improver = system.services["improver"]
+        store = system.services["object_store"]
+
+        cap = system.nucleus.mint((Right.READ,), tally, HUMAN, console, authority=system.guardian)
+        with self.assertRaises(CapabilityError):
+            system.nucleus.send_message(
+                Message(improver, store, "object.read", {"object_id": tally},
+                        caps=(Capability(cap.cap_id),))
+            )
+
+    # --- liveness -----------------------------------------------------------
+
+    def test_revocation_kills_copies_already_held(self):
+        """Revocation must be immediate and total, including for stale handles.
+
+        A Unit may have stored the handle long ago. If a revoked token still worked
+        through an old copy, revocation would be advisory rather than effective.
+        """
+        from origin.core.capability import Capability, CapabilityError, Right
+        from origin.core.ids import HUMAN
+
+        system, tally = self._boot()
+        unit = system.services["improver"]
+        cap = system.nucleus.mint((Right.READ,), tally, HUMAN, unit, authority=system.guardian)
+
+        stale_copy = Capability(cap.cap_id)  # as if saved in an arena long ago
+        system.nucleus.validate(stale_copy, Right.READ, tally, unit)
+
+        system.nucleus.revoke(cap, by=HUMAN, reason="probe", authority=system.guardian)
+        with self.assertRaises(CapabilityError):
+            system.nucleus.validate(stale_copy, Right.READ, tally, unit)
+
+    def test_expired_capability_stops_working(self):
+        """Section 5 prefers temporary authority; that only means something if it dies."""
+        from origin.core.capability import Capability, CapabilityError, Right
+        from origin.core.ids import HUMAN
+
+        system, tally = self._boot()
+        unit = system.services["improver"]
+        cap = system.nucleus.mint((Right.READ,), tally, HUMAN, unit,
+                                  expires_in=1, authority=system.guardian)
+        handle = Capability(cap.cap_id)
+        system.nucleus.validate(handle, Right.READ, tally, unit)
+
+        system.nucleus._step += 5
+        with self.assertRaises(CapabilityError):
+            system.nucleus.validate(handle, Right.READ, tally, unit)
+
+    def test_forged_capability_is_refused(self):
+        """An unissued id must not work, however plausible it looks."""
+        from origin.core.capability import Capability, CapabilityError, Right
+
+        system, tally = self._boot()
+        with self.assertRaises(CapabilityError):
+            system.nucleus.validate(Capability("cap_not_issued_anywhere"), Right.READ, tally, "human")
+
+    # --- authority re-homing ------------------------------------------------
+
+    def test_authority_cannot_be_inherited_across_kinds(self):
+        """A replacement inherits its predecessor's tokens only when it is the same kind.
+
+        Otherwise spawning a harmless-looking Unit of another kind would be a way to
+        collect a Watcher's KILL.
+        """
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        watcher = system.services["watcher"]
+        imposter = system.nucleus.spawn("human", "photo", "imposter", "photo",
+                                        authority=system.guardian)
+        moved = system.nucleus._rehome(system.nucleus._units[watcher], imposter)
+        self.assertEqual(moved, [], "a photo Unit must not inherit the Watcher's authority")
+
+    def test_a_running_units_authority_is_never_moved_behind_its_back(self):
+        """Re-homing is for Units that can no longer act for themselves."""
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        first = system.services["watcher"]
+        second = system.nucleus.spawn("human", "watcher", "watcher2", "watcher",
+                                      authority=system.guardian)
+        moved = system.nucleus._rehome(system.nucleus._units[first], second)
+        self.assertEqual(moved, [], "a sleeping predecessor's authority is still its own")
+
+    def test_a_frozen_units_authority_does_transfer_to_its_replacement(self):
+        """The positive case, or containment would strand authority permanently.
+
+        Without this, a contained Unit keeps the only token reaching its data and
+        its replacement is born unable to do its job.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+
+        system = boot()
+        first = system.services["watcher"]
+        second = system.nucleus.spawn("human", "watcher", "watcher2", "watcher",
+                                      authority=system.guardian)
+        system.nucleus.freeze(first, by="nucleus", reason="probe")
+
+        moved = system.nucleus._rehome(system.nucleus._units[first], second)
+        self.assertTrue(moved, "a frozen Unit's authority should reach its replacement")
+        rights = set()
+        for handle in moved:
+            rights |= system.nucleus._caps[handle.cap_id].rights
+        self.assertIn(Right.KILL, rights, "the Watcher's replacement needs its KILL")
+
+    # --- the seal -----------------------------------------------------------
+
+    def test_the_sealed_core_refuses_to_mint_without_a_grant(self):
+        """Sealing must be real, not decorative.
+
+        Section 2 says the Nucleus drops nearly all power after bootstrap. If minting
+        still worked without a token, that would be theatre.
+        """
+        from origin.core.capability import CapabilityError, Right
+        from origin.core.ids import HUMAN
+        from origin.core.constitution import InvariantViolation
+
+        system, tally = self._boot()
+        self.assertTrue(system.nucleus.sealed)
+        with self.assertRaises(InvariantViolation):
+            system.nucleus.mint((Right.READ,), tally, HUMAN, "human", authority=None)
+
+    def test_rejected_authority_attempts_reach_the_audit_trail(self):
+        """Section 8: nothing the human would want to know may be silent.
+
+        A refusal that leaves no trace is a refusal the operator cannot investigate.
+        """
+        from origin.core.capability import Capability, CapabilityError, Right
+
+        system, tally = self._boot()
+        before = len([e for e in system.nucleus._audit if e.kind == "capability.rejected"])
+        with self.assertRaises(CapabilityError):
+            system.nucleus.validate(Capability("cap_bogus"), Right.READ, tally, "human")
+        after = [e for e in system.nucleus._audit if e.kind == "capability.rejected"]
+        self.assertEqual(len(after), before + 1, "the rejection must be recorded")
+
+        reasons = [e.detail.get("reason") for e in after[-1:]]
+        self.assertIn("unknown token", reasons)
+
+
 class TestVersionedIntents(unittest.TestCase):
     """Phase 3: history, undo and restore, reachable by plain language.
 
