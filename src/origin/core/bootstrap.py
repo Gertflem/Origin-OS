@@ -260,8 +260,19 @@ def boot(
     )
     retention_id = retention.unit_id
 
+    # The Studio is section 8's other human interface: a spatial canvas of living
+    # Objects. Spawned like any other agent rather than added to BOOT_ORDER -- the
+    # human-facing surfaces are ordinary Units that may evolve, and a system whose
+    # canvas cannot be killed is a system whose canvas cannot be redesigned.
+    studio = nucleus.spawn(
+        HUMAN, "studio", "studio", "studio",
+        params={"services": {}},
+        authority=guardian,
+    )
+    studio_id = studio.unit_id
+
     # --- pass 2: the full services map, a fresh copy per Unit ----------------
-    all_services = {**boot_ids, **demo_ids, "retention": retention_id}
+    all_services = {**boot_ids, **demo_ids, "retention": retention_id, "studio": studio_id}
     boot["object_store"].arena["params"] = {"services": dict(all_services)}
     boot["naming"].arena["params"] = {"services": dict(all_services)}
     boot["console"].arena["params"] = {
@@ -275,6 +286,7 @@ def boot(
     # Merge, do not replace: this Unit's retention policy was set when it spawned
     # and overwriting params here would silently reset it to the defaults.
     retention.arena["params"]["services"] = dict(all_services)
+    studio.arena["params"] = {"services": dict(all_services)}
 
     # --- standing authority, scoped as tightly as each job allows ------------
     def grant(rights, target, holder, label):
@@ -322,6 +334,19 @@ def boot(
     grant((Right.PIN,), None, retention_id, "retention: namespace PIN")
     grant((Right.SEND,), object_store_id, retention_id, "retention: SEND -> object_store")
     grant((Right.SEND,), console_id, retention_id, "retention: SEND -> console")
+
+    # The Studio may look at everything and speak to two services. It holds no right
+    # that mutates anything: no APPEND, PIN, GRANT, SPAWN, KILL or REVOKE. A canvas
+    # that draws the whole system and can also change it would be the most powerful
+    # Unit in the runtime, which is the wrong property for the thing the human looks
+    # at. Selecting an Object proposes to the Console instead, so section 8's intent
+    # loop stays the only path to authority.
+    grant((Right.AUDIT,), None, studio_id, "studio: namespace AUDIT")
+    grant((Right.RESOLVE,), None, studio_id, "studio: namespace RESOLVE")
+    grant((Right.SEND,), HUMAN, studio_id, "studio: SEND -> human")
+    grant((Right.SEND,), object_store_id, studio_id, "studio: SEND -> object_store")
+    grant((Right.SEND,), naming_id, studio_id, "studio: SEND -> naming")
+    grant((Right.SEND,), console_id, studio_id, "studio: SEND -> console")
     grant((Right.SPAWN,), None, improver_id, "improver: namespace SPAWN")
     grant((Right.SEND,), NUCLEUS, improver_id, "improver: SEND -> nucleus")
     grant((Right.SEND,), console_id, improver_id, "improver: SEND -> console")

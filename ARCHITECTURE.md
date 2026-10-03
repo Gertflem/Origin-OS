@@ -171,13 +171,29 @@ not a bad *state*. The Improver is denied the rights to modify the Nucleus, and
 `PROTECTED_KINDS` stops it proposing changes to the Watcher, Object store, or
 Console.
 
-## 9. Human control surface
+## 9. Human control surfaces
 
-`console.py` is the human's console and is deliberately unprivileged: five
-standing tokens (SEND, RESOLVE, BIND, AUDIT, GRANT). It cannot read a photo,
-freeze a Unit, or kill one without a proposal the human confirms.
+Section 8 asks for two: a clean textual Console, and a Studio that is a "spatial
+continuous canvas of living Objects and Verbs". Both are ordinary Units, and both
+are spawned rather than constitutional — a canvas that cannot be killed is a canvas
+that cannot be redesigned.
 
-The intent loop it implements is section 8's promise:
+`console.py` is deliberately unprivileged: five standing tokens (SEND, RESOLVE,
+BIND, AUDIT, GRANT). It cannot read a photo, freeze a Unit, or kill one without a
+proposal the human confirms.
+
+`studio.py` renders Objects onto a grid grouped by kind, showing version counts and
+how many are compacted. Its layout is derived state in its own arena — kill it and
+the layout is rebuilt, because a view has no authority over what it views.
+
+It holds AUDIT, SEND and RESOLVE, and *nothing that mutates*: no APPEND, PIN, GRANT,
+SPAWN or KILL. That is the constraint that matters. A canvas that draws the whole
+system and can also change it would be the most powerful Unit in the runtime, and
+acting through it would bypass propose-then-confirm. Selecting an Object on the
+canvas therefore routes to the Console, which keeps the intent loop as the only path
+to authority.
+
+The intent loop the Console implements is section 8's promise:
 
 ```text
 express → resolve → propose capabilities → confirm → execute → inspectable result

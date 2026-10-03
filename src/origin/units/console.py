@@ -67,11 +67,17 @@ HELP = f"""Origin — {__phase__}. Say what you want, or use a command.
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
     /retention [n]     the retention policy and its last n sweeps
+    /studio            the spatial canvas of living Objects (section 8)
+    /studio layout     the canvas's current cell assignments
+    /studio focus <n>  mark an Object as focused on the canvas
     /powers            the Nucleus's own account of its powers
     /reclaimable [n]   what compaction could reclaim, per Object and store-wide
     /sweep [k] [m] [apply]
                        run the retention policy store-wide (preview without apply)
     /retention [n]     the Retention Unit: policy, and its own sweep log
+    /studio            hand a render request to the Studio Unit
+    /studio layout     show which cell each Object occupies
+    /studio focus <n>  focus an Object on the canvas (by name)
 
   actions (proposed first, executed only on 'confirm')
     /focus [name]      show or set what "this" and "it" refer to
@@ -488,6 +494,9 @@ def _command(ctx: UnitContext, text: str) -> None:
     elif cmd in ("watcher", "improver", "retention"):
         _inspect_unit(ctx, cmd, rest)
 
+    elif cmd == "studio":
+        _studio_command(ctx, rest)
+
     elif cmd == "focus":
         if not arg:
             _say(ctx, f"focus: {_render(ctx.mem['focus']) or 'nothing'}")
@@ -696,6 +705,42 @@ def _inspect_unit(ctx: UnitContext, what: str, rest: list[str]) -> None:
         _say(c, "\n".join(lines))
 
     ctx.request(service, verb, {"limit": limit}, (cap,), then=shown)
+
+
+def _studio_command(ctx: UnitContext, rest: list[str]) -> None:
+    """Hand a render request to the Studio Unit.
+
+    The Console does not draw the canvas itself. Section 8 says both human
+    interfaces are ordinary Units that may evolve, and if the Console rendered the
+    spatial view directly then the Studio would be a second implementation of the
+    same code rather than an independently replaceable interface.
+    """
+    studio = _services(ctx).get("studio")
+    if studio is None:
+        _say(ctx, "No Studio Unit is running. Spawn one with /spawn studio studio.")
+        return
+
+    sub = rest[0] if rest else "render"
+    if sub == "layout":
+        ctx.send(studio, "studio.layout", {})
+        return
+    if sub == "focus" and len(rest) > 1:
+        # Resolving through the Naming Unit first means the human can name an
+        # Object here rather than pasting an id, and the Studio still only ever
+        # receives a resolved id it was handed.
+        _resolve(ctx, " ".join(rest[1:]), "object", _studio_focus(studio))
+        return
+    if sub not in ("render",):
+        _say(ctx, "usage: /studio [render|layout|focus <name>]")
+        return
+    ctx.send(studio, "studio.render", {})
+
+
+def _studio_focus(studio_id: str):
+    def apply(c: UnitContext, target: str, name: str) -> None:
+        c.send(studio_id, "studio.focus", {"object_id": target})
+
+    return apply
 
 
 def _status(ctx: UnitContext) -> None:

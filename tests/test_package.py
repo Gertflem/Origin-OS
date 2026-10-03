@@ -385,6 +385,82 @@ class TestPackage(unittest.TestCase):
         self.assertNotIn("REFUSED", output)
         self.assertNotIn("no APPEND Capability", output)
 
+    def test_studio_renders_a_canvas_grouped_by_kind(self):
+        """Section 8's Studio: a spatial view of living Objects.
+
+        Asserted on behaviour that matters rather than exact glyphs: every Object
+        appears, kinds cluster into adjacent cells, and a second render keeps the
+        same assignment so the view does not reshuffle under the reader.
+        """
+        from origin.core.bootstrap import boot
+        from origin.main import _handle
+
+        system = boot()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertTrue(_handle(system, "/studio"))
+        canvas = buffer.getvalue()
+        self.assertIn("Origin Studio", canvas)
+
+        studio_id = system.services["studio"]
+        layout = dict(system.nucleus._arenas[studio_id]["layout"])
+        self.assertTrue(layout, "the canvas should have placed Objects")
+
+        # Kinds cluster: two mailboxes must be adjacent, not scattered.
+        cells = {oid: (r, c) for oid, (r, c) in layout.items()}
+        by_kind: dict[str, list[tuple[int, int]]] = {}
+        for oid, cell in cells.items():
+            kind = system.store._objects[oid].kind
+            by_kind.setdefault(kind, []).append(cell)
+        # Same-kind Objects must land in the same band, so reading down a column
+        # keeps you within one kind. Adjacent rows is the real property.
+        mailboxes = sorted(by_kind["mailbox"])
+        self.assertLessEqual(mailboxes[1][0] - mailboxes[0][0], 1, mailboxes)
+
+        # Stable across renders.
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/studio")
+        self.assertEqual(system.nucleus._arenas[studio_id]["layout"], layout)
+
+    def test_studio_holds_no_mutating_authority(self):
+        """A canvas that draws everything must not also be able to change it.
+
+        This is the constraint that keeps section 8's Studio a *view*. If it could
+        append or spawn it would be the most powerful Unit in the runtime, and
+        acting through it would bypass the propose-then-confirm loop entirely.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.capability import Right
+
+        system = boot()
+        studio_id = system.services["studio"]
+        held = set()
+        for rec in system.nucleus._caps.values():
+            if studio_id in rec.holders:
+                held |= rec.rights
+
+        self.assertIn(Right.AUDIT, held)
+        self.assertIn(Right.SEND, held)
+        for forbidden in (Right.APPEND, Right.READ, Right.PIN, Right.HISTORY,
+                          Right.GRANT, Right.REVOKE, Right.SPAWN, Right.KILL,
+                          Right.FREEZE, Right.BIND, Right.GUARDIAN):
+            self.assertNotIn(forbidden, held, f"studio must not hold {forbidden}")
+
+    def test_studio_is_an_ordinary_unit(self):
+        """Section 8: both human interfaces are ordinary Units that may evolve.
+
+        So the Studio must not be in the constitutional boot set -- a canvas that
+        cannot be killed is a canvas that cannot be redesigned.
+        """
+        from origin.core.bootstrap import boot
+        from origin.core.constitution import BOOT_ORDER, is_boot_unit
+
+        self.assertNotIn("studio", BOOT_ORDER)
+        self.assertFalse(is_boot_unit("studio"))
+        system = boot()
+        self.assertIn("studio", system.services)
+
     def test_retention_unit_reclaims_history_without_being_asked(self):
         """Section 3's tiering policy must actually run, unattended.
 

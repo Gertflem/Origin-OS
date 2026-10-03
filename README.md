@@ -137,6 +137,33 @@ It holds `PIN` and nothing else beyond `SEND` — no inspection, no delegation, 
 spawn. If it dies the system keeps working; history just stops being reclaimed and
 `/retention` says so.
 
+## Look at the canvas
+
+Section 8 promises two human interfaces: the textual Console, and a spatial canvas
+of living Objects. Both are ordinary Units.
+
+```text
+/studio             # render the canvas
+/studio layout      # which cell each Object occupies
+/studio focus beach photo
+```
+
+```text
+Origin Studio - living Objects, grouped by kind
+
+  obj_co..(16) [1v]          | obj_co..(14) [1v]          | obj_co..(13) [1v]
+  obj_co..(14) [1v]          | tally [1v]                 | obj_fl..(13) [1v]
+  anne [1v]                  | david [1v]                 | * beach photo [1v]
+  sunset photo [1v]          |                            |
+
+  10 Objects in 5 kinds.
+  [Nv] = N versions, and Nc of those are compacted. * marks the focused Object.
+```
+
+It is a view, not a control. The Studio holds AUDIT, SEND and RESOLVE and nothing
+that mutates, so acting on an Object still goes through an intent and a confirmed
+grant. Kill it and the layout rebuilds — a view has no authority over what it views.
+
 ## Run the tests
 
 ```bash
@@ -176,6 +203,7 @@ Origin/
 │       ├── naming.py        names, intent resolution
 │       ├── object_store.py  persistent storage as a service
 │       ├── retention.py     applies the tiered-retention policy
+│       ├── studio.py        spatial canvas of living Objects
 │       └── watcher.py       detects invariant violations
 ├── tests/
 │   └── test_package.py
