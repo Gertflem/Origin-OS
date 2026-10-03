@@ -45,4 +45,5 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 - [x] 2.5 Crash-recovery test matrix: simulated kills during tmp write, mid-backup, before replace, after replace; acknowledged history always survives
 - [x] 2.6 Persistence wired into the live system: `boot(storage_path=...)` and `--storage PATH`; genesis Objects are skipped (never overwritten) when they already exist. Before this, the durable store was only reachable from tests.
 - [x] 2.7 Restart respawns demo Units from the effective (preferred-else-latest) code version with this boot's service ids overlaid; re-preferring seq 0 is honoured
-- [ ] 2.8 Compaction and retention policy: configurable tiers, operator report of reclaimable history, pinned/preferred never reclaimed (verify)
+- [x] 2.8a Compaction bugs fixed: the preferred version is never reclaimed (it was; reading it then raised CompactedError and broke Unit respawn), and the compaction marker keeps the Object's real current state instead of replacing it with bookkeeping. Two old tests that encoded the buggy behaviour were corrected.
+- [ ] 2.8b Operator report of reclaimable history (per object and store-wide) so compaction is a visible, deliberate choice

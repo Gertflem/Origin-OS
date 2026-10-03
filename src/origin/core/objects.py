@@ -605,7 +605,7 @@ class ObjectStore:
         cutoff = obj.latest_seq - keep_recent
         reclaimed: list[int] = []
         for v in obj.versions:
-            if v.seq > cutoff or v.seq in obj.pins or v.seq in obj.compacted:
+            if v.seq > cutoff or v.seq in obj.pins or v.seq in obj.compacted or v.seq == obj.preferred:
                 continue
             reclaimed.append(v.seq)
 
@@ -625,16 +625,14 @@ class ObjectStore:
             )
 
         if reclaimed:
+            # The marker version carries the Object's unchanged current state, so
+            # compaction never replaces real data with bookkeeping. What was
+            # reclaimed is recorded in the note, which is kept forever.
             self._do_append(
                 obj,
                 holder,
-                {
-                    "kind": "compaction",
-                    "reclaimed": reclaimed,
-                    "retained_pins": sorted(obj.pins),
-                    "kept_recent": keep_recent,
-                },
-                note=f"compacted {len(reclaimed)} version payload(s); metadata retained",
+                obj.effective().payload,
+                note=f"compacted {len(reclaimed)} version payload(s) {reclaimed}; pins {sorted(obj.pins)}; metadata retained",
                 step=obj.versions[-1].step,
                 acked=True,
             )

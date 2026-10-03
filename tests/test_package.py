@@ -58,6 +58,30 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_compaction_never_reclaims_preferred_and_preserves_current_state(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        store = ObjectStore(lambda *a: None)
+        cap = Capability("cap-compact")
+        a = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for i in range(1, 7):
+            store.append("alice", a.object_id, {"t": i}, cap, step=i + 1)
+        store.prefer("alice", a.object_id, 1, cap)
+        result = store.compact("alice", a.object_id, cap, keep_recent=2)
+        self.assertNotIn(1, result["reclaimed"])  # preferred is what consumers run
+        self.assertEqual(store.read("alice", a.object_id, cap).payload, {"t": 1})
+
+        b = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for i in range(1, 7):
+            store.append("alice", b.object_id, {"t": i}, cap, step=i + 1)
+        store.compact("alice", b.object_id, cap, keep_recent=2)
+        # Bookkeeping must not replace the Object's actual current state.
+        self.assertEqual(store.read("alice", b.object_id, cap).payload, {"t": 6})
+        note = store.history("alice", b.object_id, cap)[-1]["note"]
+        self.assertIn("compacted", note)
+        self.assertIn("0", note)
+
     def test_store_recovery_events_reach_watcher_and_audit_trail(self):
         from origin.core.bootstrap import boot
         from origin.core.ids import HUMAN
@@ -460,7 +484,8 @@ class TestPackage(unittest.TestCase):
         result = store.compact("alice", obj.object_id, cap, keep_recent=0)
         self.assertEqual(result["reclaimed"], [0, 1])
         self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"text": "third"})
-        self.assertEqual(store.read("alice", obj.object_id, cap).payload["kind"], "compaction")
+        # Current state is unchanged by compaction (it used to be replaced by a bookkeeping record).
+        self.assertEqual(store.read("alice", obj.object_id, cap).payload, {"text": "third"})
         with self.assertRaises(CompactedError):
             store.read("alice", obj.object_id, cap, seq=0)
 
@@ -760,7 +785,8 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(summary["total_versions"], 4)
         self.assertEqual(summary["durable"], 4)
         self.assertEqual(summary["pinned"], 1)
-        self.assertEqual(summary["compacted"], 2)
+        # seq 0 is preferred, seq 2 is pinned, seq 3 is the newest: only seq 1 may be reclaimed.
+        self.assertEqual(summary["compacted"], 1)
         self.assertEqual(summary["preferred"], 0)
 
     def test_objects_command_reports_compaction_state(self):
