@@ -197,6 +197,7 @@ Origin/
 ├── CONSTITUTION.md      the rules and the phase roadmap (source of truth)
 ├── CONTRIBUTING.md      how to work on this codebase
 ├── PROGRESS.md          what is built and verified
+├── REVIEW_BRIEF.md      how to get an independent adversarial review
 ├── VISION.md            why an OS for agents looks like this
 ├── pyproject.toml
 ├── src/origin/
