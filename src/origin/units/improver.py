@@ -255,6 +255,23 @@ def _handle_request(
             decline(f"could not read the code Object ({reply.verb}: {reply.payload})")
             return
         code = reply.payload["version"]["payload"]
+
+        # Re-check the code's own declared kind against the kind of the Unit it is
+        # being used to repair. The core checks the *declared* kind at birth, because
+        # it cannot read Objects -- so this is where a false declaration is actually
+        # caught, since this Unit has the payload in hand.
+        #
+        # Without it, `PROTECTED_KINDS` was the only thing stopping a protected kind
+        # from being rewritten: a watcher-kind Unit carrying a code Object passes
+        # "has versioned code", so the list in an ordinary Unit stood alone.
+        code_kind = code.get("kind") if isinstance(code, dict) else None
+        if code_kind != kind:
+            decline(
+                f"code Object {code_object_id} implements {code_kind!r}, not the {kind!r} "
+                "Unit it is attached to; refusing to rewrite a mismatch"
+            )
+            return
+
         found = diagnose(event, detail, code)
         if found.action != "improve":
             decline(found.reason)
@@ -396,6 +413,9 @@ def _restart(
             "params": code.get("params"),
             "code_object_id": code_object_id,
             "code_seq": seq,
+            # The core refuses a Unit whose code implements a different kind than
+            # the Unit claims, and this Unit has just verified the two agree.
+            "code_kind": code.get("kind"),
             "replaces": p.get("unit_id"),
         },
         (spawn_cap,),
@@ -489,6 +509,7 @@ def _handle_rollback(
                     "params": code.get("params"),
                     "code_object_id": code_object_id,
                     "code_seq": seq,
+                    "code_kind": code.get("kind"),
                     "replaces": p.get("unit_id"),
                 },
                 (spawn_cap,),

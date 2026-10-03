@@ -436,13 +436,35 @@ class Nucleus:
         params: Optional[dict] = None,
         code_object_id: Optional[str] = None,
         code_seq: Optional[int] = None,
+        code_kind: Optional[str] = None,
     ) -> Unit:
         """Bring a Unit into existence. Pre-seal this is a core power; post-seal
-        it is reachable only through `spawn` with a valid SPAWN Capability."""
+        it is reachable only through `spawn` with a valid SPAWN Capability.
+
+        A Unit's `kind` and the kind of the code it runs must agree. They used to be
+        independent arguments, so `spawn(kind="watcher", code_object_id=<flaky's
+        code>)` produced a watcher-kind Unit running flaky's code, with nothing
+        objecting. That matters beyond tidiness: `PROTECTED_KINDS` protects a watcher
+        from self-improvement by *kind*, so a watcher carrying a code Object was
+        reachable by the Improver and only a list in an ordinary Unit stood in the
+        way.
+
+        `code_kind` is the caller declaring what kind the code Object implements,
+        because the core cannot read it: the Nucleus has no code Object of its own
+        and knows nothing about storage. So this catches a mismatch at the boundary
+        rather than proving the declaration true. The Improver re-checks against the
+        payload it actually reads, which is where a false declaration is caught.
+        """
         handler = UNIT_TYPES.get(entry)
         if handler is None:
             raise constitution.InvariantViolation(
                 1, f"no unit entry point {entry!r} — the Nucleus cannot invent code"
+            )
+        if code_object_id is not None:
+            constitution.require(
+                8,
+                code_kind == kind,
+                f"refused to birth a {kind!r} Unit whose code implements {code_kind!r}",
             )
         unit = Unit(
             kind=kind,
@@ -481,13 +503,15 @@ class Nucleus:
         authority: Optional[Capability] = None,
         endow: Iterable[Capability] = (),
         replaces: Optional[str] = None,
+        code_kind: Optional[str] = None,
     ) -> Unit:
         """Capability-mediated birth. The post-bootstrap path."""
         if authority is None:
             raise constitution.InvariantViolation(2, f"{requester} attempted spawn with no SPAWN Capability")
         self.validate(authority, Right.SPAWN, None, requester)
         unit = self.birth(
-            kind, name, entry, params=params, code_object_id=code_object_id, code_seq=code_seq
+            kind, name, entry, params=params, code_object_id=code_object_id,
+            code_seq=code_seq, code_kind=code_kind,
         )
         # The spawner may only endow what it itself holds — authority attenuates
         # down a chain of births, it never grows.

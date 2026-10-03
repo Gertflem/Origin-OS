@@ -1722,6 +1722,124 @@ class TestSecondReviewFindings(unittest.TestCase):
         self.assertEqual(system.store.read(HUMAN, TALLY, system.guardian).payload, {"count": 60})
 
 
+class TestCodeKindBinding(unittest.TestCase):
+    """A Unit's declared kind and the kind of its code must agree.
+
+    Found while investigating whether `PROTECTED_KINDS` needed to become a real
+    authority boundary. It turned out the more useful fix was one level down: `spawn`
+    accepted `kind` and `code_object_id` independently, so a watcher-kind Unit
+    carrying flaky's code was born without objection -- and that is exactly the case
+    where `PROTECTED_KINDS`, a list in an ordinary Unit, was the only thing standing
+    between the Improver and a protected Unit's code.
+    """
+
+    def test_the_core_refuses_a_unit_whose_code_disagrees(self):
+        from origin.core.bootstrap import boot, CODE_OBJECT
+        from origin.core.constitution import InvariantViolation
+
+        system = boot()
+        with self.assertRaises(InvariantViolation):
+            system.nucleus.spawn(
+                "human", "watcher", "rogue", "watcher",
+                code_object_id=CODE_OBJECT["flaky"], code_seq=0,
+                code_kind="flaky", authority=system.guardian,
+            )
+
+    def test_a_matching_spawn_still_works(self):
+        """Otherwise the check would just be a boot that never completes."""
+        from origin.core.bootstrap import boot, CODE_OBJECT
+
+        system = boot()
+        unit = system.nucleus.spawn(
+            "human", "photo", "second_photo", "photo",
+            code_object_id=CODE_OBJECT["photo"], code_seq=0,
+            code_kind="photo", authority=system.guardian,
+        )
+        self.assertEqual(unit.kind, "photo")
+        self.assertEqual(unit.code_object_id, CODE_OBJECT["photo"])
+
+    def test_a_false_declaration_is_caught_where_the_payload_is_read(self):
+        """The core cannot read Objects, so it checks the declaration, not the truth.
+
+        It has no code Object of its own and knows nothing about storage. So a caller
+        that lies about `code_kind` gets past the core -- and the Improver is where
+        the lie is caught, because it has the payload in hand.
+        """
+        from origin.core.bootstrap import boot, CODE_OBJECT
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+
+        system = boot()
+        # Deliberately NOT a protected kind, so PROTECTED_KINDS cannot be the thing
+        # that refuses it. Only the payload check can.
+        liar = system.nucleus.spawn(
+            "human", "photo", "liar", "photo",
+            code_object_id=CODE_OBJECT["flaky"], code_seq=0,
+            code_kind="photo", authority=system.guardian,
+        )
+        self.assertEqual(liar.kind, "photo")
+
+        system.nucleus.send_message(
+            Message(HUMAN, system.services["improver"], "improve.request",
+                    {"unit_id": liar.unit_id, "name": liar.name, "kind": "photo",
+                     "event": "crashed", "code_object_id": CODE_OBJECT["flaky"]})
+        )
+        system.nucleus.schedule()
+
+        log = system.nucleus._arenas[system.services["improver"]]["log"]
+        reasons = [e.get("reason", "") for e in log if e.get("event") == "declined"]
+        self.assertTrue(any("implements" in r for r in reasons), log)
+        self.assertFalse([e for e in log if e.get("event") == "improved"], log)
+        self.assertEqual(len(system.store._objects[CODE_OBJECT["flaky"]].versions), 1,
+                         "flaky's code must be untouched")
+
+    def test_the_spawn_verb_forwards_the_declared_kind(self):
+        """Same trap as target_kind on mint: drop it and the check is unreachable.
+
+        `spawn` is the only path a Unit has, so an argument the verb does not forward
+        makes the core's check dead code on the wire.
+        """
+        from origin.core.bootstrap import boot, CODE_OBJECT
+        from origin.core.capability import Right
+        from origin.core.ids import HUMAN, NUCLEUS
+        from origin.message import Message
+
+        system = boot()
+        send = system.nucleus.find_capability(HUMAN, Right.SEND, NUCLEUS)
+        self.assertIsNotNone(send)
+
+        system.nucleus.send_message(
+            Message(HUMAN, NUCLEUS, "spawn",
+                    {"kind": "watcher", "name": "rogue", "entry": "watcher",
+                     "code_object_id": CODE_OBJECT["flaky"], "code_seq": 0,
+                     "code_kind": "flaky"},
+                    caps=(send,))
+        )
+        system.nucleus.schedule()
+
+        # The core refused, so there is no such Unit and no code was attached.
+        names = {u.name for u in system.nucleus._units.values()}
+        self.assertNotIn("rogue", names)
+
+    def test_protected_kinds_are_redundant_for_the_boot_units(self):
+        """Why the list can stay as defence in depth rather than as the boundary.
+
+        All four protected kinds have no code Object, so `if not code_object_id`
+        already refuses them one line later. That makes the list honest belt-and-
+        braces rather than load-bearing -- and worth knowing, because pretending it
+        is the boundary would be the over-claim.
+        """
+        from origin.core.bootstrap import boot
+        from origin.units.improver import PROTECTED_KINDS
+
+        system = boot()
+        for kind in PROTECTED_KINDS:
+            units = [u for u in system.nucleus._units.values() if u.kind == kind]
+            for unit in units:
+                with self.subTest(kind=kind):
+                    self.assertIsNone(unit.code_object_id)
+
+
 class TestVersionedIntents(unittest.TestCase):
     """Phase 3: history, undo and restore, reachable by plain language.
 

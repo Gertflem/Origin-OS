@@ -138,6 +138,13 @@ compacting and reloading all leave the digests matching.
   it: they were never asked to. But it is a different question from the one they
   answer, and it would be easy to over-claim here. Fixing it means hashing a stored
   copy rather than the live object, at the cost of a copy per version.
+  `test_an_in_place_payload_mutation_is_not_detected` pins the boundary.
+
+  This reaches further than the digest. An in-place mutation of a version that is
+  **pinned and preferred** is equally unreported, and the preferred version then
+  serves the mutated payload — so section 3's promise that a pin is never
+  auto-removed is about retention, not immutability, and a reader who took "pinned"
+  to mean "cannot change" would be wrong.
 
 A digest-less record — a snapshot from before digests existed — is skipped rather
 than reported, because its absence is not evidence of tampering.
@@ -238,9 +245,27 @@ the failing Unit's code Object, appends an improved version, and marks it
 preferred; the Watcher then respawns the Unit from that version.
 
 Improvements are versions, not edits, so a bad improvement is a bad *version* and
-not a bad *state*. The Improver is denied the rights to modify the Nucleus, and
-`PROTECTED_KINDS` stops it proposing changes to the Watcher, Object store, or
-Console.
+not a bad *state*.
+
+**A Unit's kind and its code must agree.** `Nucleus.spawn` takes `kind` and
+`code_object_id` independently, so it used to accept a watcher-kind Unit carrying
+flaky's code without objection. That is the case that mattered: `PROTECTED_KINDS`
+protects a kind *by name*, so a protected kind with a code Object is reachable by
+the Improver, and only a list in an ordinary Unit stood in the way. The core now
+refuses a mismatch at birth.
+
+The core cannot read the Object to check — it has no code Object of its own and
+knows nothing about storage — so it verifies the caller's *declaration*
+(`code_kind`). A caller that lies gets past the core, and the Improver is where the
+lie is caught, because it holds the payload. Both halves are needed: the core turns
+a mismatch into a refusal at the boundary, the Improver makes the declaration
+truthful.
+
+`PROTECTED_KINDS` stays, as defence in depth. Worth being precise about what it now
+is: all four protected kinds have no code Object, so `if not code_object_id` refuses
+them anyway one line later. For the boot Units the list is redundant; it is kept
+because it costs nothing and states the intent in one place. Calling it a security
+boundary would be the over-claim.
 
 ## 10. Human control surfaces
 

@@ -48,6 +48,10 @@ def _spawn(nucleus, msg, p: dict) -> dict:
         params=p.get("params"),
         code_object_id=p.get("code_object_id"),
         code_seq=p.get("code_seq"),
+        # Forwarded so the core can refuse a Unit whose declared kind and code kind
+        # disagree. Like `target_kind` on mint, dropping it here would leave the
+        # check unreachable through the only path a Unit has.
+        code_kind=p.get("code_kind"),
         authority=msg.caps[0] if msg.caps else None,
         endow=p.get("endow", ()),
         replaces=p.get("replaces"),

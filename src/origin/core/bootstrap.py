@@ -240,6 +240,10 @@ def boot(
             params=params,
             code_object_id=oid,
             code_seq=seq,
+            # The code Object for `kind` declares that kind, and this Unit is of
+            # that kind. Stated explicitly because the core now refuses a mismatch,
+            # and a boot that failed on it would be a boot that never happens.
+            code_kind=kind,
             authority=guardian,
         )
     demo_ids = {kind: unit.unit_id for kind, unit in demo.items()}
