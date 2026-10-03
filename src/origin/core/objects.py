@@ -157,7 +157,12 @@ class Object:
 #: bare callable rather than a Nucleus import is what stops the ObjectStore from
 #: depending on privileged code — it is an ordinary service that happens to be
 #: given a validator at birth.
-Validator = Callable[[Capability, Right, Optional[str], str], Any]
+#:
+#: The optional fifth argument is the kind of the Object being acted on. The store
+#: knows kinds because it holds the Objects; the core cannot, because it has no
+#: code Object and knows nothing about storage. Passing the kind in keeps kind
+#: scoping enforceable without teaching the privileged core about storage.
+Validator = Callable[..., Any]
 
 
 def _json_default(value: Any) -> Any:
@@ -518,10 +523,29 @@ class ObjectStore:
             self.recovery_events.append({"kind": "history.damaged", "count": len(self.history_damage)})
 
     # --- authority -------------------------------------------------------
-    def _check(self, cap: Optional[Capability], right: Right, target: Optional[str], holder: str) -> None:
+    def _check(
+        self,
+        cap: Optional[Capability],
+        right: Right,
+        target: Optional[str],
+        holder: str,
+        target_kind: Optional[str] = None,
+    ) -> None:
+        """Check authority for one operation, passing the Object's kind if we have it.
+
+        The kind is resolved here rather than in the core because the store is the
+        only thing that knows what kind an Object is. `_check` looks it up from
+        `target` when it can, so every Object-right caller gets kind scoping
+        without having to remember to supply it — forgetting would fail closed
+        rather than silently widen a scoped token.
+        """
+        if target_kind is None and target is not None:
+            obj = self._objects.get(target)
+            if obj is not None:
+                target_kind = obj.kind
         if cap is None:
             raise PermissionError(f"{holder} attempted {right.value} on {target} with no Capability")
-        self._validate(cap, right, target, holder)
+        self._validate(cap, right, target, holder, target_kind)
 
     # --- write path ------------------------------------------------------
     def create(

@@ -56,7 +56,8 @@ verb that any service could answer given the right token belongs in `units/`.
 
 | Rule | Enforced by |
 |---|---|
-| No ambient authority (invariant 2) | `Nucleus._execute_core_verb` resolves every verb against `msg.caps`; `Nucleus.validate` refuses a token that does not cover the right, target, and holder |
+| No ambient authority (invariant 2) | `Nucleus._execute_core_verb` resolves every verb against `msg.caps`; `Nucleus.validate` refuses a token that does not cover the right, target, kind, and holder |
+| Delegation only narrows (section 5) | `Nucleus.mint` validates the presented GRANT against the *same* target and kind as the token being minted, so a delegate can attenuate but never widen |
 | No shared mutable state (invariant 5) | `Nucleus._enforce_arena` confines every Unit to its own `UnitContext.mem` |
 | All lasting state is versioned (invariant 3) | `ObjectStore._do_append` only ever adds a `Version`; there is no update or delete |
 | Communication is by Message (invariant 4) | `Nucleus.send_message` is the only path between actors, and it audits the route |
@@ -160,10 +161,16 @@ scoped to one Object, with an expiry — never a broader grant than was shown.
 
 ## 9. Known limitations
 
-- Capability targets are ids, not kinds, so a token cannot be scoped to "code
-  Objects only". An Improver that can rewrite code can also rewrite data. Section
-  7's real protection is that every change is appended rather than applied.
-  Kind-scoped targets are Phase 3 work.
+- A token may be scoped by Object **id**, by Object **kind**, or left
+  namespace-wide, and never by anything broader than what granted it. The
+  Improver's write token is scoped to the `code` kind, so it covers every code
+  Object including ones created later, and is refused on data. `grants()` fails
+  closed: a kind-scoped token rejects a target whose kind cannot be resolved.
+- Kinds are plain strings the store asserts. The core cannot verify them — it has
+  no code Object and knows nothing about storage — so a store that mislabelled a
+  data Object as `code` would be mislabelled for authority too. The core passes
+  the kind in as an argument rather than looking it up, which keeps the trust
+  boundary explicit instead of hidden inside a lookup.
 - The Object store's authoritative in-memory copy lives in its own Unit's arena,
   so killing that Unit mid-run still discards in-memory state. With a configured
   storage path a restart recovers from the snapshot; without one, data is lost.

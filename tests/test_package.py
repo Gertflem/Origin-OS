@@ -49,7 +49,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         store = ObjectStore(validator)
         cap = Capability("cap-durability")
 
@@ -163,7 +163,7 @@ class TestPackage(unittest.TestCase):
         class Crash(BaseException):
             pass
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-crash")
         real_fsync, real_replace, real_copy = os.fsync, os.replace, objmod.shutil.copy2
 
@@ -251,7 +251,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.objects import ObjectStore
         import origin.core.objects as objmod
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-degraded")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -279,7 +279,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-sweep")
 
         store = ObjectStore(validator)
@@ -308,7 +308,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-sweep-apply")
 
         store = ObjectStore(validator)
@@ -344,7 +344,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-sweep-short")
 
         store = ObjectStore(validator)
@@ -357,12 +357,89 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(report["objects_swept"], 0)
         self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
 
+    def test_kind_scoped_token_covers_any_object_of_that_kind(self):
+        """A kind scope is about the kind, not a list of ids.
+
+        This is what makes one token correct for code Objects a Unit has never
+        seen. It was the reason the Improver previously needed a token minted per
+        known code Object, which meant a newly created Unit's code was unreachable.
+        """
+        from origin.core.capability import Right
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        improver = system.services["improver"]
+
+        def holds(right, kind):
+            return system.nucleus.find_capability(improver, right, "obj_anything", kind) is not None
+
+        self.assertTrue(holds(Right.READ, "code"))
+        self.assertTrue(holds(Right.APPEND, "code"))
+        self.assertFalse(holds(Right.READ, "photo"))
+        self.assertFalse(holds(Right.READ, "counter"))
+        self.assertFalse(holds(Right.READ, None))
+
+    def test_improver_cannot_rewrite_a_data_object(self):
+        """The limitation this closes, asserted as behaviour rather than prose.
+
+        Section 7 protected the Improver by making every change an append, so a bad
+        improvement was a bad version rather than bad state. Kind scoping is the
+        stronger guarantee: the token is refused outright on a data Object.
+        """
+        from origin.core.capability import Capability, CapabilityError, Right
+        from origin.core.bootstrap import boot, BEACH_PHOTO, CODE_OBJECT
+
+        system = boot()
+        improver = system.services["improver"]
+        code_oid = CODE_OBJECT["photo"]
+        record = next(
+            r for r in system.nucleus._caps.values()
+            if improver in r.holders and r.target_kind == "code"
+        )
+        cap = Capability(record.cap_id)
+
+        # Code it may touch.
+        system.nucleus.validate(cap, Right.APPEND, code_oid, improver, "code")
+        # Data it may not, even though it holds a valid, unrevoked APPEND token.
+        with self.assertRaises(CapabilityError) as caught:
+            system.nucleus.validate(cap, Right.APPEND, BEACH_PHOTO, improver, "photo")
+        self.assertIn("does not grant", str(caught.exception))
+
+        # And an unknown kind fails closed rather than widening the token.
+        with self.assertRaises(CapabilityError):
+            system.nucleus.validate(cap, Right.APPEND, BEACH_PHOTO, improver, None)
+
+    def test_kind_scoped_grant_cannot_be_laundered_back_to_namespace_wide(self):
+        """Attenuation stays one-directional for kind scope, as it is for target.
+
+        Without this a delegate restricted to code Objects could mint itself an
+        unrestricted token and the whole mechanism would be decorative.
+        """
+        from origin.core.capability import Right
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        console = system.services["console"]
+        guardian = system.guardian
+
+        # A delegate holding a kind-scoped GRANT.
+        narrow = system.nucleus.mint(
+            (Right.GRANT,), None, "human", console, authority=guardian, target_kind="code"
+        )
+        # Narrowing further is allowed.
+        system.nucleus.mint(
+            (Right.READ,), None, console, console, authority=narrow, target_kind="code"
+        )
+        # Widening back out is not.
+        with self.assertRaises(Exception):
+            system.nucleus.mint((Right.READ,), None, console, console, authority=narrow, target_kind=None)
+
     def test_sweep_needs_pin_authority(self):
         """Compaction is gated on PIN because retention policy is a human decision."""
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-no-sweep")
 
         store = ObjectStore(validator)
@@ -378,7 +455,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-fallback")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "objects.json"
@@ -413,7 +490,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-integrity")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "objects.json"
@@ -437,7 +514,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-events")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "objects.json"
@@ -454,7 +531,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-corrupt-main")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -474,7 +551,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-persist")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -494,7 +571,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-durable-write")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -513,7 +590,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-recover")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -549,7 +626,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-corrupt-tmp")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -585,7 +662,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-prefer-tmp")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -638,7 +715,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-compact")
         store = ObjectStore(validator)
 
@@ -660,7 +737,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import CompactedError, ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-reclaim")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -935,7 +1012,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-retention")
         store = ObjectStore(validator)
 
@@ -959,7 +1036,7 @@ class TestPackage(unittest.TestCase):
         from origin.core.objects import ObjectStore
         from origin.main import _handle, boot
 
-        validator = lambda cap, right, target, holder: None
+        validator = lambda cap, right, target, holder, target_kind=None: None
         cap = Capability("cap-compact-view")
         store = ObjectStore(validator)
         obj = store.create("alice", "journal", {"text": "first"}, cap, step=1)
@@ -1509,7 +1586,7 @@ class TestReclaimableReport(unittest.TestCase):
         from origin.core.capability import Capability, Right
         from origin.core.objects import ObjectStore
 
-        def validator(cap, right, target, holder):
+        def validator(cap, right, target, holder, target_kind=None):
             if right is Right.AUDIT:
                 raise PermissionError("no audit")
 

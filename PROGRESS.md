@@ -53,7 +53,7 @@ which is portable and a more precise description of the crash window.
 ## Current phase: Phase 3 — Minimal interactive system
 
 - [ ] Studio Unit: the spatial canvas of living Objects and Verbs (section 8's long-term interface)
-- [ ] Capability targets addressable by kind/namespace, so a token can be scoped to code Objects rather than all Objects (this is what caps the Improver's APPEND today)
+- [x] 3.1 Capability targets addressable by Object kind, so a token can be scoped to "code Objects" rather than to every Object. The Improver's READ+APPEND is now one kind-scoped token instead of one per known code Object: it covers code created later and is refused on data. Attenuation stays one-directional — a kind-scoped GRANT can mint a narrower token, never a wider one
 - [ ] Sweep wired into a scheduled Unit so retention runs without the operator typing `/sweep apply`
 - [ ] Intent loop widened past the current verb set (deictic follow-ups and compound recipients already work)
 

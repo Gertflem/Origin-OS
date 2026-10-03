@@ -29,11 +29,20 @@ proposes a better Unit is not the agent that destroys the old one — the Watche
 retires it), GRANT/REVOKE (above), PIN (retention policy is a human decision),
 AUDIT and BIND (it has no reason to look around or rename things).
 
-Honest known limitation: Capability targets are ids, not kinds, so this Unit's
-APPEND token cannot be scoped to "code Objects only". An Improver that can rewrite
-code can also rewrite data. Section 7's real protection here is that every change
-is appended rather than applied, so a bad improvement is a bad *version* and not a
-bad *state*. Object kinds and namespaces are Phase 3 work.
+How this Unit's write authority is scoped: one token covering every `code` Object
+(see CODE_KIND), not one token per known code Object. That distinction matters
+twice over. It covers code this Unit has never seen, so a Unit born later is still
+repairable; and it cannot be stretched to data, so an APPEND token that can rewrite
+code is mechanically refused on a `photo`, `mailbox` or `counter`.
+
+That refusal is enforced by the core, not by this Unit's good behaviour — the token
+simply does not validate against a data Object. Section 7's older protection still
+holds as a second line of defence: every change is appended rather than applied, so
+a bad improvement is a bad *version* and not a bad *state*.
+
+Honest remaining limitation: kinds are plain strings, so this Unit trusts the kind
+an Object claims rather than deriving it from anything the core can check. A store
+that mislabelled a data Object as `code` would be mislabelled for authority too.
 """
 
 from __future__ import annotations
@@ -60,6 +69,16 @@ from ..unit import UnitContext, is_answer, unit_type
 #: here and importing it there means the two cannot drift — and if they ever do,
 #: this Unit is the one that matters, because it is the one that acts.
 PROTECTED_KINDS = frozenset({"nucleus", "object_store", "improver", "watcher"})
+
+#: The Object kind this Unit's read and write authority is scoped to.
+#:
+#: Every Unit's code is a `code` Object, so scoping to this kind covers all of
+#: them — including code for a Unit born after this one started — while leaving
+#: the token mechanically incapable of touching a `photo`, `mailbox` or `counter`.
+#: Section 7's protection used to be that a bad improvement is a bad *version*
+#: rather than a bad *state*; that is still true, but it is now the second line of
+#: defence rather than the only one.
+CODE_KIND = "code"
 
 
 @dataclass
@@ -218,7 +237,7 @@ def _handle_request(
         )
         return
 
-    read_cap = ctx.hold(Right.READ, code_object_id)
+    read_cap = ctx.hold(Right.READ, code_object_id, CODE_KIND)
     if read_cap is None:
         decline(f"I hold no READ Capability for code Object {code_object_id}")
         return
@@ -234,7 +253,7 @@ def _handle_request(
             return
 
         attempts[key] = attempts.get(key, 0) + 1
-        append_cap = c.hold(Right.APPEND, code_object_id)
+        append_cap = c.hold(Right.APPEND, code_object_id, CODE_KIND)
         if append_cap is None:
             decline(f"I hold no APPEND Capability for code Object {code_object_id}")
             return
@@ -398,8 +417,8 @@ def _handle_rollback(
         fail("rollback needs object_store, code_object_id and seq")
         return
 
-    read_cap = ctx.hold(Right.READ, code_object_id)
-    append_cap = ctx.hold(Right.APPEND, code_object_id)
+    read_cap = ctx.hold(Right.READ, code_object_id, CODE_KIND)
+    append_cap = ctx.hold(Right.APPEND, code_object_id, CODE_KIND)
     if read_cap is None or append_cap is None:
         fail(f"I hold no READ/APPEND Capability for code Object {code_object_id}")
         return

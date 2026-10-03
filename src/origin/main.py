@@ -163,7 +163,10 @@ def _revoke(system: System, args: list[str]) -> None:
         for i, (cid, rec) in enumerate(caps, 1):
             rights = "+".join(sorted(r.value for r in rec.rights))
             holders = ",".join(mask(str(h)) for h in sorted(rec.holders)) or "-"
+            # Both scopes, so the revoke list never understates what a token covers.
             target = mask(str(rec.target)) if rec.target else "(namespace)"
+            if rec.target_kind:
+                target = f"{rec.target_kind} objects"
             life = f"expires {rec.expires_at_step}" if rec.is_temporary() else "permanent"
             print(f"  {i:>2}. {cid}  {rights:<16} target {target:<18} to {holders:<12} {life:<12} {rec.label}")
         print("Revoke with: /revoke <number|cap_id|last> [reason]   ('last' = most recent borrowed token)")
@@ -598,6 +601,8 @@ def _caps(system: System, args: list[str] | None = None) -> None:
         rights = "+".join(sorted(r.value for r in rec.rights)) or "-"
         holders = ", ".join(mask(str(holder)) for holder in sorted(rec.holders)) or "-"
         target = mask(str(rec.target)) if rec.target else "(namespace)"
+        if rec.target_kind:
+            target = f"{rec.target_kind} objects"
         grantor = mask(str(rec.grantor))
         lifetime = f"expires {rec.expires_at_step}" if rec.expires_at_step is not None else "permanent"
         if rec.revoked:

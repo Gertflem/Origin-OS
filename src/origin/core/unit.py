@@ -112,15 +112,25 @@ class UnitContext:
         """
         return self.unit.arena
 
-    def hold(self, right: Right, target: Optional[str] = None) -> Optional[Capability]:
+    def hold(
+        self,
+        right: Right,
+        target: Optional[str] = None,
+        target_kind: Optional[str] = None,
+    ) -> Optional[Capability]:
         """Find one of my own tokens that authorises `right` against `target`.
 
         Handles are inert, so a Unit cannot inspect its own authority by reading
         them; it has to ask. This is the only introspection a Unit gets, and it
         is scoped to its own holdings — asking about another principal's tokens
         is not a question this method can express.
+
+        `target_kind` names the kind of Object being acted on, so a token scoped to
+        one kind is not selected for another. A Unit that omits it still gets a
+        kind-scoped token only when that token's scope is unambiguous, because the
+        final authority check happens at the service and will refuse a mismatch.
         """
-        return self._api.find_capability(self.unit.unit_id, right, target)
+        return self._api.find_capability(self.unit.unit_id, right, target, target_kind)
 
     def holdings(self) -> list[dict]:
         """Redacted description of everything I have been given."""

@@ -125,6 +125,15 @@ class CapabilityRecord:
     holders: set[str] = field(default_factory=set)
     #: None means namespace-wide. Otherwise the right applies only to this target.
     target: Optional[str] = None
+    #: None means "no kind restriction". Otherwise the token only covers Objects
+    #: of this kind, whichever Object they are.
+    #:
+    #: This is what lets an authority be scoped to "code Objects" instead of "every
+    #: Object that happens to exist". Without it a token either names one Object id
+    #: or covers the whole namespace, so a Unit trusted to rewrite code is
+    #: mechanically trusted to rewrite data too. Both scopes narrow; a token may
+    #: carry either, and never anything broader than what it was granted.
+    target_kind: Optional[str] = None
     label: str = ""
     created_step: int = 0
     #: None = long-lived. An int = the step at which this token stops working.
@@ -134,12 +143,26 @@ class CapabilityRecord:
     revoked_by: Optional[str] = None
     revoked_reason: str = ""
 
-    def grants(self, right: Right, target: Optional[str]) -> bool:
-        """Does this record authorise `right` against `target`?"""
+    def grants(self, right: Right, target: Optional[str], target_kind: Optional[str] = None) -> bool:
+        """Does this record authorise `right` against this target and kind?
+
+        `target_kind` is the kind of the Object being acted on, resolved by the
+        caller. It is only consulted when the record itself declares a kind scope,
+        so the common case costs nothing and cannot be broken by a caller passing
+        the wrong kind for an unrestricted token.
+
+        A token that declares a kind scope refuses a target whose kind does not
+        match, including when the kind cannot be resolved at all. Failing closed
+        matters here: an unknown kind must never widen a scoped token into a
+        namespace-wide one.
+        """
         if self.revoked:
             return False
         if not (self.rights & ABSOLUTE_RIGHTS) and right not in self.rights:
             return False
+        if self.target_kind is not None:
+            if target_kind is None or target_kind != self.target_kind:
+                return False
         # A namespace-wide token (target is None) covers any target. A scoped
         # token covers exactly its scope and nothing else.
         return self.target is None or self.target == target
@@ -158,6 +181,7 @@ class CapabilityRecord:
             "id": mask(self.cap_id),
             "rights": sorted(r.value for r in self.rights),
             "target": self.target,
+            "target_kind": self.target_kind,
             "grantor": self.grantor,
             "holders": sorted(self.holders),
             "label": self.label,
@@ -182,6 +206,9 @@ class Proposal:
     rights: frozenset[Right]
     target: Optional[str]
     reason: str
+    #: Restrict to Objects of this kind, whichever Object they are. Narrows the
+    #: grant; never widens it.
+    target_kind: Optional[str] = None
     #: Preferred lifetime. Temporary is the default because section 5 says so.
     expires_in_steps: Optional[int] = 32
     label: str = ""
@@ -190,6 +217,7 @@ class Proposal:
         return {
             "rights": sorted(r.value for r in self.rights),
             "target": self.target,
+            "target_kind": self.target_kind,
             "reason": self.reason,
             "expires_in_steps": self.expires_in_steps,
             "label": self.label,

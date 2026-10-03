@@ -766,9 +766,15 @@ def _show_inspection(ctx: UnitContext, what: str, p: dict) -> None:
         for r in rows:
             holders = ", ".join(mask(str(h)) for h in r.get("holders", [])) or "-"
             expiry = r.get("expires_at_step")
+            # Show both scopes. A kind-scoped token names no single target, so
+            # printing "(namespace)" alone would understate it -- and section 8
+            # says the human can always inspect what authority actually exists.
+            target = mask(str(r["target"])) if r.get("target") else "(namespace)"
+            if r.get("target_kind"):
+                target = f"{r['target_kind']} objects"
             lines.append(
                 f"  {r.get('id',''):<16} {'+'.join(r.get('rights', [])):<22} "
-                f"target {mask(str(r['target'])) if r.get('target') else '(namespace)':<16} "
+                f"target {target:<16} "
                 f"from {r.get('grantor','')}  to {holders}  "
                 f"{'expires ' + str(expiry) if expiry is not None else 'permanent'}"
                 f"{'  REVOKED by ' + str(r.get('revoked_by')) if r.get('revoked') else ''}"

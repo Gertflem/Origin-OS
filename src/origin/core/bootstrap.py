@@ -263,11 +263,20 @@ def boot(
     grant((Right.SEND,), console_id, watcher_id, "watcher: SEND -> console")
     grant((Right.SEND,), improver_id, watcher_id, "watcher: SEND -> improver")
 
-    # The Improver may read and extend each demo Unit's code, and spawn — but the
-    # SPAWN token is namespace-wide because spawn() validates SPAWN against target
-    # None. It may only message the four principals in the repair loop.
-    for oid in CODE_OBJECT.values():
-        grant((Right.READ, Right.APPEND), oid, improver_id, f"improver: READ+APPEND -> {oid}")
+    # The Improver may read and extend Unit code, and spawn — but the SPAWN token is
+    # namespace-wide because spawn() validates SPAWN against target None. It may
+    # only message the four principals in the repair loop.
+    #
+    # Its write authority is scoped by kind, not by object id: one token covering
+    # every `code` Object, whichever code Object exists now or is created by a
+    # future demo Unit. Previously this was one token per known code Object, which
+    # meant an Improver that could rewrite code could mechanically rewrite data too
+    # -- the limitation section 7's own protection only papered over. Now the
+    # token is refused outright on a `photo`, `mailbox` or `counter`.
+    def grant_kind(rights, target_kind, holder, label):
+        nucleus.mint(rights, None, HUMAN, holder, label=label, target_kind=target_kind)
+
+    grant_kind((Right.READ, Right.APPEND), "code", improver_id, "improver: READ+APPEND -> code Objects")
     grant((Right.SPAWN,), None, improver_id, "improver: namespace SPAWN")
     grant((Right.SEND,), NUCLEUS, improver_id, "improver: SEND -> nucleus")
     grant((Right.SEND,), console_id, improver_id, "improver: SEND -> console")

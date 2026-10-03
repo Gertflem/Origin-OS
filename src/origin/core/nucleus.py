@@ -113,6 +113,7 @@ class Nucleus:
         expires_in: Optional[int] = None,
         label: str = "",
         authority: Optional[Capability] = None,
+        target_kind: Optional[str] = None,
     ) -> Capability:
         """Create a Capability.
 
@@ -121,6 +122,10 @@ class Nucleus:
         new Capability can never be broader than the token that authorised it.
         That last part is what stops a delegate from using a namespace-wide GRANT
         to mint itself a GUARDIAN.
+
+        `target_kind` narrows a grant to Objects of one kind. Delegation stays
+        one-directional: a delegate may not hand on a *wider* kind scope than the
+        GRANT token it holds, exactly as it may not hand on a wider target.
         """
         rights = frozenset(rights)
         constitution.require(2, bool(rights), "cannot mint an empty Capability")
@@ -140,8 +145,13 @@ class Nucleus:
             # GRANT on target X means "may delegate authority over X". validate()
             # enforces that scope, and the GUARDIAN-only rule above means no
             # delegate can ever mint an absolute token. Between those two, a
-            # delegate can narrow but never widen.
-            self.validate(authority, Right.GRANT, target, grantor)
+            # delegate can narrow but never widen. Passing `target_kind` is what makes
+            # attenuation one-directional for kind scope as well: a delegate
+            # restricted to code Objects passes this check when it mints another
+            # code-scoped token and fails it when it tries to mint an unrestricted
+            # one. Without the argument a narrow kind grant could be laundered back
+            # into a namespace-wide token, making the scoping decorative.
+            self.validate(authority, Right.GRANT, target, grantor, target_kind)
 
         cap = Capability.new()
         self._caps[cap.cap_id] = CapabilityRecord(
@@ -150,6 +160,7 @@ class Nucleus:
             grantor=grantor,
             holders={holder},
             target=target,
+            target_kind=target_kind,
             label=label,
             created_step=self._step,
             expires_at_step=(self._step + expires_in) if expires_in is not None else None,
@@ -160,6 +171,7 @@ class Nucleus:
                 "cap": str(cap),
                 "rights": sorted(r.value for r in rights),
                 "target": target,
+                "target_kind": target_kind,
                 "grantor": grantor,
                 "holder": holder,
                 "expires_in": expires_in,
@@ -171,7 +183,12 @@ class Nucleus:
         return cap
 
     def validate(
-        self, cap: Capability, right: Right, target: Optional[str], holder: str
+        self,
+        cap: Capability,
+        right: Right,
+        target: Optional[str],
+        holder: str,
+        target_kind: Optional[str] = None,
     ) -> CapabilityRecord:
         """The single choke point every exercise of authority passes through.
 
@@ -180,6 +197,13 @@ class Nucleus:
         privileged action without calling this first, and this function has no
         exceptions for anyone — not the boot Units, not the Improver, not the
         Nucleus itself.
+
+        `target_kind` is the kind of the Object being acted on, supplied by the
+        caller that actually holds the Object. The core cannot resolve kinds
+        itself — it has no code Object and knows nothing about storage — so this
+        stays an ordinary argument rather than a lookup the privileged core would
+        have to perform. It only matters for tokens minted with a `target_kind`
+        scope; every other token ignores it.
         """
         rec = self._caps.get(cap.cap_id)
         if rec is None:
@@ -218,7 +242,7 @@ class Nucleus:
                 right=right.value,
                 cap_id=cap.cap_id,
             )
-        if not rec.grants(right, target):
+        if not rec.grants(right, target, target_kind):
             self._record(
                 "capability.rejected",
                 {
@@ -226,6 +250,8 @@ class Nucleus:
                     "holder": holder,
                     "right": right.value,
                     "target": target,
+                    "target_kind": target_kind,
+                    "scope_kind": rec.target_kind,
                     "reason": "out of scope",
                 },
             )
@@ -301,9 +327,19 @@ class Nucleus:
         self._record("revoke", {"cap": str(cap), "by": by, "reason": reason, "holders": sorted(rec.holders)})
 
     def find_capability(
-        self, holder: str, right: Right, target: Optional[str] = None
+        self,
+        holder: str,
+        right: Right,
+        target: Optional[str] = None,
+        target_kind: Optional[str] = None,
     ) -> Optional[Capability]:
         """Return one live token `holder` owns that grants `right` on `target`.
+
+        `target_kind` mirrors `validate`: a Unit selecting a token says what kind
+        of Object it is about to act on, so a kind-scoped token is only ever
+        selected for an Object of that kind. Without this a Unit would pick a
+        kind-scoped token for the wrong kind and only discover it had done so when
+        the service refused the message a hop later.
 
         Prefers the narrowest and shortest-lived *class* of match, per section 5's
         "temporary is preferred when sufficient": spending a scoped, expiring token
@@ -321,13 +357,18 @@ class Nucleus:
         """
         best: Optional[tuple[tuple[int, int, float], Capability]] = None
         for cap in self._caps.values():
-            if holder not in cap.holders or not cap.grants(right, target) or not cap.live_at(self._step):
+            if holder not in cap.holders or not cap.grants(right, target, target_kind) or not cap.live_at(self._step):
                 continue
             # Scoped beats namespace-wide; temporary beats long-lived. Within a
             # rank, a later expiry (None = permanent = +inf) sorts smaller via
             # negation, so the longest-lived match of the narrowest class wins.
             life = float("inf") if cap.expires_at_step is None else float(cap.expires_at_step)
-            key = (0 if cap.target is not None else 1, 0 if cap.is_temporary() else 1, -life)
+            # A kind-scoped token is narrower than a namespace-wide one, so it
+            # ranks with target-scoped tokens rather than with the unrestricted
+            # ones. Otherwise the Improver's "code Objects" token would lose to a
+            # broader token and the scoping would buy nothing.
+            scoped = cap.target is not None or cap.target_kind is not None
+            key = (0 if scoped else 1, 0 if cap.is_temporary() else 1, -life)
             if best is None or key < best[0]:
                 best = (key, Capability(cap.cap_id))
         return best[1] if best else None
@@ -349,6 +390,7 @@ class Nucleus:
             expires_in=proposal.expires_in_steps,
             label=proposal.label or proposal.reason,
             authority=authority,
+            target_kind=proposal.target_kind,
         )
 
     # =====================================================================
