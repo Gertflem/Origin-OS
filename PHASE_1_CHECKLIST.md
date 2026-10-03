@@ -34,3 +34,9 @@ The project should now move to Phase 2: Persistent Object Substrate.
 ## Working rule
 
 Do not jump ahead into Phase 2 until the working Phase 1 model is stable and inspected. The constitution is the contract; we keep the sequence intact.
+
+## Phase 2 progress
+
+- [x] 2.1 Corrupt main snapshot no longer silently wipes memory: previous good snapshot kept as `.bak`, damaged file quarantined as `.corrupt.<ns>`, load falls back to backup
+- [ ] 2.2 Surface recovery events (quarantine/fallback) in `--status` and the audit trail
+- [ ] 2.3 Detect acknowledged-version loss on load (seq gaps / validation of loaded history)

@@ -58,6 +58,26 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_object_store_recovers_from_corrupt_main_snapshot_via_backup(self):
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-corrupt-main")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            first = ObjectStore(validator, storage_path=path)
+            obj = first.create("alice", "journal", {"text": "one"}, cap, step=1)
+            first.append("alice", obj.object_id, {"text": "two"}, cap, step=2)
+            path.write_text("{ truncated", encoding="utf-8")
+
+            recovered = ObjectStore(validator, storage_path=path)
+            # Acknowledged history must not be silently dropped.
+            self.assertEqual(recovered.read("alice", obj.object_id, cap, seq=0).payload, {"text": "one"})
+            # The damaged file is preserved for inspection, never deleted.
+            self.assertTrue(any(p.name.startswith("objects.json.corrupt") for p in Path(tmpdir).iterdir()))
+
     def test_object_store_persists_across_restarts(self):
         from origin.core.capability import Capability
         from origin.core.objects import ObjectStore

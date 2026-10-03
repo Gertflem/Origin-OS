@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -214,6 +216,9 @@ class ObjectStore:
             json.dump(self._snapshot(), handle, sort_keys=True, default=_json_default)
             handle.flush()
             os.fsync(handle.fileno())
+        if self._storage_path.exists():
+            # Keep the previous good snapshot so a damaged main file is recoverable.
+            shutil.copy2(self._storage_path, self._backup_path())
         os.replace(tmp_path, self._storage_path)
         try:
             dir_fd = os.open(str(self._storage_path.parent), os.O_RDONLY)
@@ -222,6 +227,17 @@ class ObjectStore:
             finally:
                 os.close(dir_fd)
         except (AttributeError, OSError, NotImplementedError):
+            pass
+
+    def _backup_path(self) -> Path:
+        return self._storage_path.with_suffix(f"{self._storage_path.suffix}.bak")
+
+    def _quarantine(self) -> None:
+        """Move an unreadable snapshot aside. Damaged history is evidence, not trash."""
+        target = self._storage_path.with_name(f"{self._storage_path.name}.corrupt.{time.time_ns()}")
+        try:
+            os.replace(self._storage_path, target)
+        except OSError:
             pass
 
     def _load(self) -> None:
@@ -261,8 +277,11 @@ class ObjectStore:
 
         payload = _load_json(candidate)
         if payload is None:
-            self._objects = {}
-            return
+            self._quarantine()
+            payload = _load_json(self._backup_path())
+            if payload is None:
+                self._objects = {}
+                return
 
         if promoted:
             try:
