@@ -685,7 +685,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["started_at"] = 12
         agent.arena["last_heartbeat"] = 15
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         self.assertEqual(report["agents"][0]["name"], "live-agent")
         self.assertEqual(report["agents"][0]["state"], "running")
         self.assertEqual(report["agents"][0]["started_at"], 12)
@@ -703,7 +703,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["tools"] = ["read", "write"]
         agent.arena["memory_scope"] = {"objects": ["obj-beach"], "max_bytes": 128}
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "tool-agent")
         self.assertEqual(target["tools"], ["read", "write"])
         self.assertEqual(target["memory_scope"]["max_bytes"], 128)
@@ -724,7 +724,7 @@ class TestPackage(unittest.TestCase):
         self.assertIsNotNone(unit.arena.get("failed_at"))
 
         unit.arena["replaced_by"] = "replacement-agent"
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "flaky-agent")
         self.assertEqual(target["state"], "failed")
         self.assertEqual(target["failure_reason"], "timeout")
@@ -744,7 +744,7 @@ class TestPackage(unittest.TestCase):
         agent.arena["last_heartbeat"] = 15
         system.nucleus.freeze(agent.unit_id, by=NUCLEUS, reason="test containment")
 
-        report = system.nucleus._inspect(HUMAN, system.guardian, {"what": "agents"})
+        report = system.nucleus.describe(HUMAN, system.guardian, {"what": "agents"})
         target = next(item for item in report["agents"] if item["name"] == "contained-agent")
         self.assertEqual(target["state"], "frozen")
 

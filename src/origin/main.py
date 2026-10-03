@@ -571,7 +571,7 @@ def _audit(system: System, args: list[str] | None = None) -> None:
 
 def _messages(system: System, args: list[str] | None = None) -> None:
     limit = int((args or ["20"])[0]) if (args and (args[0].isdigit() or args[0].startswith("-"))) else 20
-    rows = system.nucleus._inspect(HUMAN, system.guardian, {"what": "messages", "limit": max(0, limit)}).get("messages", [])
+    rows = system.nucleus.describe(HUMAN, system.guardian, {"what": "messages", "limit": max(0, limit)}).get("messages", [])
     print("Origin messages")
     print(f"  last {len(rows)} routed messages")
     for entry in rows:
