@@ -20,7 +20,7 @@ it. That token is revocable by the Guardian like any other.
 from __future__ import annotations
 
 from ..capability import CapabilityError, Right
-from ..ids import NUCLEUS
+from ..ids import HUMAN, NUCLEUS, mask
 from ..message import Message
 from ..unit import UnitContext, is_answer, unit_type
 from .improver import PROTECTED_KINDS
@@ -35,6 +35,37 @@ def watcher_handler(ctx: UnitContext, msg: Message) -> None:
 
     if msg.verb == "unit.contained":
         p = msg.payload or {}
+        # Only the Nucleus may claim a containment. Section 4 says containment is
+        # the core's job because a crash must be contained by something that cannot
+        # itself be crashed -- so a `unit.contained` from any other sender is a
+        # forgery, not a report.
+        #
+        # This check is the whole difference between "the system notices a crash"
+        # and "any Unit holding namespace SEND can invent one". Without it, a
+        # forged event escalates to the Improver, which appends a new version to a
+        # real code Object and spawns a replacement -- so code changes at runtime
+        # with no crash and no human approval. SEND proves reachability, not
+        # authority to assert system facts.
+        if msg.sender != NUCLEUS:
+            events.append(
+                {
+                    "event": "spoofed_containment_rejected",
+                    "at_step": ctx.step,
+                    "source": msg.sender,
+                    "claimed_unit": p.get("unit_id"),
+                    "claimed_kind": p.get("kind"),
+                }
+            )
+            ctx.send(
+                services.get("console", ""),
+                "console.notice",
+                {
+                    "text": f"REJECTED a containment claim from {mask(str(msg.sender))}: only the "
+                            "Nucleus may report a crash. Recorded in /watcher."
+                },
+            )
+            return
+
         unit_id = p.get("unit_id")
         events.append({**p, "at_step": ctx.step, "source": msg.sender})
 
@@ -110,9 +141,13 @@ def watcher_handler(ctx: UnitContext, msg: Message) -> None:
             (cap,),
             reply_to=msg.reply_to,
         )
+        # Recorded as a *request*, not as a retirement. The kill is fire-and-forget
+        # to the core and can be refused; recording it as done here would put a
+        # retirement in the audit trail for a Unit that is still alive, and for one
+        # that never existed. The `kill.confirmed` branch below records the fact.
         events.append(
             {
-                "event": "retired",
+                "event": "retire_requested",
                 "unit_id": p["unit_id"],
                 "replacement": p.get("replacement"),
                 "at_step": ctx.step,
@@ -136,8 +171,28 @@ def watcher_handler(ctx: UnitContext, msg: Message) -> None:
         return
 
     if msg.verb == "store.recovery":
-        # The durable store repaired or flagged itself while loading. Operators
-        # must see that: silent self-repair is exactly what section 8 forbids.
+        # The durable store repaired or flagged itself while loading. Operators must
+        # see that: silent self-repair is exactly what section 8 forbids.
+        #
+        # Boot sends this as the human principal, because the store holds no
+        # reference to the audit trail (that would be ambient authority) and boot
+        # speaks on its behalf like any other principal. So the only legitimate
+        # sender is HUMAN, and an unauthenticated claim of store damage is refused
+        # for the same reason a forged containment is: a Unit that can announce
+        # corruption trains the operator to ignore the reports that matter.
+        if msg.sender != HUMAN:
+            events.append(
+                {"event": "spoofed_recovery_rejected", "at_step": ctx.step, "source": msg.sender}
+            )
+            ctx.send(
+                services.get("console", ""),
+                "console.notice",
+                {
+                    "text": f"REJECTED a store recovery report from {mask(str(msg.sender))}: "
+                            "only the human principal reports at boot. Recorded in /watcher."
+                },
+            )
+            return
         p = msg.payload or {}
         events.append(
             {"event": "store.recovery", "recovery": p.get("recovery", []), "damage": p.get("damage", []), "at_step": ctx.step}

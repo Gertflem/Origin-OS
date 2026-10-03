@@ -847,6 +847,172 @@ class TestAuthorityBoundaries(unittest.TestCase):
         self.assertIn("unknown token", reasons)
 
 
+class TestSpoofedSystemEvents(unittest.TestCase):
+    """Phase 4: system facts may only be asserted by the system.
+
+    Found by the adversarial review. `unit.contained` and `store.recovery` were
+    accepted from any principal holding SEND. SEND proves reachability, not
+    authority to assert that something happened -- so a forged containment
+    escalated to the Improver, which appended a version to a real code Object and
+    spawned a replacement, with no crash and no human approval.
+    """
+
+    def _boot(self):
+        from origin.core.bootstrap import boot, CODE_OBJECT
+        return boot(), CODE_OBJECT
+
+    def _watcher_events(self, system) -> list[dict]:
+        return system.nucleus._arenas[system.services["watcher"]].get("events", [])
+
+    def _improver_log(self, system) -> list[dict]:
+        return system.nucleus._arenas[system.services["improver"]].get("log", [])
+
+    def test_a_spoofed_containment_is_refused(self):
+        """Any Unit holding namespace SEND must not be able to invent a crash."""
+        from origin.core.capability import Right
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+        from origin.core.bootstrap import CODE_OBJECT
+
+        system, code_objects = self._boot()
+        watcher = system.services["watcher"]
+        photo_code = CODE_OBJECT["photo"]
+        versions_before = len(system.store._objects[photo_code].versions)
+        units_before = len(system.nucleus._units)
+
+        # The object store holds namespace SEND, as do naming and console.
+        spoofer = system.services["object_store"]
+        self.assertIsNotNone(system.nucleus.find_capability(spoofer, Right.SEND, watcher))
+
+        system.nucleus.send_message(
+            Message(
+                spoofer, watcher, "unit.contained",
+                {
+                    "unit_id": "unit_does_not_exist",
+                    "name": "flaky",
+                    "kind": "photo",
+                    "event": "crashed",
+                    "detail": "forged",
+                    "code_object_id": photo_code,
+                    "code_seq": 0,
+                },
+            )
+        )
+        system.nucleus.schedule()
+
+        events = self._watcher_events(system)
+        rejected = [e for e in events if e.get("event") == "spoofed_containment_rejected"]
+        self.assertTrue(rejected, events)
+        self.assertEqual(rejected[0]["claimed_unit"], "unit_does_not_exist")
+
+        # No version was appended to a real code Object, and no Unit was born.
+        self.assertEqual(len(system.store._objects[photo_code].versions), versions_before,
+                         "a forged containment must not modify Unit code")
+        self.assertEqual(len(system.nucleus._units), units_before,
+                         "a forged containment must not spawn a replacement")
+        self.assertFalse(any(e.get("event") == "improved" for e in self._improver_log(system)))
+
+    def test_the_spoofer_really_did_hold_send(self):
+        """Guards the spoofing test itself.
+
+        A forgery test is worthless if the forger could not have sent the message in
+        the first place -- it would pass for the wrong reason. The object store holds
+        namespace SEND at bootstrap, so it can reach the Watcher; this asserts that,
+        so the refusal above can only be explained by the sender check.
+        """
+        from origin.core.capability import Right
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        watcher = system.services["watcher"]
+        self.assertIsNotNone(
+            system.nucleus.find_capability(system.services["object_store"], Right.SEND, watcher),
+            "the spoofing test is only meaningful if the spoofer can reach the Watcher",
+        )
+        self.assertIsNotNone(
+            system.nucleus.find_capability(system.services["naming"], Right.SEND, watcher)
+        )
+
+    def test_a_real_containment_still_reaches_the_improver(self):
+        """The forgery check must not be a fix that breaks self-healing.
+
+        A guard that refuses everything would satisfy the spoofing test perfectly
+        while quietly disabling the entire recovery loop, so the genuine path is
+        asserted too.
+        """
+        from origin.core.bootstrap import boot
+        from origin.main import _handle
+
+        # The flaky Unit only fails when it has work, so drive some first.
+        system = boot(fail_every=2, escalate_after=1)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/work 3")
+        for _ in range(200):
+            system.nucleus.schedule()
+            if any(e.get("event") == "improved" for e in self._improver_log(system)):
+                break
+
+        log = self._improver_log(system)
+        self.assertTrue(any(e.get("event") == "improved" for e in log),
+                        f"a genuine crash must still be repaired; improver log was {log}")
+
+        names = [e.get("event") for e in self._watcher_events(system)]
+        self.assertNotIn("spoofed_containment_rejected", names,
+                         "the core's own containments must not be mistaken for forgeries")
+        # The core's own containment is recorded as a fact, under its own name.
+        self.assertTrue(
+            any(e.get("event") in ("crashed", "containment") or e.get("source") == "nucleus"
+                for e in self._watcher_events(system)),
+            names,
+        )
+
+    def test_a_spoofed_store_recovery_is_refused(self):
+        """A Unit that can announce corruption trains the operator to ignore it."""
+        from origin.core.ids import HUMAN
+        from origin.message import Message
+        from origin.core.bootstrap import boot
+
+        system = boot()
+        watcher = system.services["watcher"]
+        system.nucleus.send_message(
+            Message(system.services["object_store"], watcher, "store.recovery",
+                    {"recovery": [{"kind": "snapshot.unrecoverable"}], "damage": [{"kind": "fake"}]})
+        )
+        system.nucleus.schedule()
+
+        events = self._watcher_events(system)
+        self.assertTrue(any(e.get("event") == "spoofed_recovery_rejected" for e in events), events)
+        self.assertFalse(any(e.get("event") == "store.recovery" for e in events))
+
+    def test_retirement_is_recorded_as_a_request_until_confirmed(self):
+        """A kill can be refused; recording it as done puts a lie in the audit trail.
+
+        The Watcher previously logged `retired` the moment it asked, so the audit
+        trail showed a retirement for Units that were still alive -- and, in the
+        forged-containment case, for a Unit that never existed. `kill.confirmed` is
+        what makes a retirement a fact.
+        """
+        from origin.core.bootstrap import boot
+        from origin.main import _handle
+
+        # Drive a real crash. The flaky Unit only fails when it has work, so this
+        # needs /work rather than just scheduling an idle system.
+        system = boot(fail_every=2, escalate_after=1)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _handle(system, "/work 3")
+        for _ in range(200):
+            system.nucleus.schedule()
+            if any(e.get("event") == "retire_requested" for e in self._watcher_events(system)):
+                break
+
+        names = [e.get("event") for e in self._watcher_events(system)]
+        self.assertIn("retire_requested", names, names)
+        self.assertNotIn("retired", names,
+                         "the optimistic name must not be logged before the kill is confirmed")
+
+
 class TestVersionedIntents(unittest.TestCase):
     """Phase 3: history, undo and restore, reachable by plain language.
 
