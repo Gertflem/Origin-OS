@@ -269,6 +269,110 @@ class TestPackage(unittest.TestCase):
             reopened = ObjectStore(validator, storage_path=path)
             self.assertEqual(reopened.read("alice", obj.object_id, cap).payload, {"t": 0})
 
+    def test_sweep_is_a_dry_run_until_told_otherwise(self):
+        """Automatic retention must not be triggerable by accident.
+
+        Section 3 states tiering as policy, but a policy that quietly deletes
+        durable history is worse than no policy. So `sweep` previews by default
+        and only reclaims when explicitly applied.
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+        store.pin("alice", obj.object_id, 0, cap)
+        store.prefer("alice", obj.object_id, 1, cap)
+
+        preview = store.sweep("alice", cap, keep_recent=3, min_versions=5)
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["versions_reclaimed"], 0)
+        self.assertEqual(preview["objects_swept"], 0)
+        self.assertEqual(len(preview["candidates"]), 1, "the long history should be a candidate")
+        # Nothing touched: every payload is still readable.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"t": 2})
+
+    def test_sweep_applies_tiered_policy_and_spares_protected_versions(self):
+        """Applying the sweep must respect pins and the preferred version.
+
+        Section 3: pins are never auto-removed, and the preferred version is the
+        one a restart respawns from -- reclaiming it would break recovery.
+        Metadata must survive even when payloads do not (invariant 7).
+        """
+        from origin.core.capability import Capability
+        from origin.core.objects import CompactedError, ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep-apply")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+        store.pin("alice", obj.object_id, 0, cap)
+        store.prefer("alice", obj.object_id, 2, cap)
+
+        result = store.sweep("alice", cap, keep_recent=3, min_versions=5, dry_run=False)
+        self.assertEqual(result["objects_swept"], 1)
+        self.assertGreater(result["versions_reclaimed"], 0)
+
+        # The three most recent stay at full fidelity.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=11).payload, {"t": 11})
+        # The pinned version survives.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+        # The preferred version survives -- reading it must not raise.
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=2).payload, {"t": 2})
+
+        # Something was actually reclaimed.
+        with self.assertRaises(CompactedError):
+            store.read("alice", obj.object_id, cap, seq=5)
+
+        # But its metadata was kept forever.
+        history = {v["seq"]: v for v in store.history("alice", obj.object_id, cap)}
+        self.assertIn(5, history)
+        self.assertEqual(history[5]["author"], "alice")
+        self.assertTrue(history[5]["acked"])
+
+    def test_sweep_leaves_short_histories_alone(self):
+        """A short history is usually worth more whole, and saves nothing."""
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-sweep-short")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "note", {"t": 0}, cap, step=1)
+        for t in range(1, 4):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+
+        report = store.sweep("alice", cap, keep_recent=1, min_versions=32, dry_run=False)
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(report["objects_swept"], 0)
+        self.assertEqual(store.read("alice", obj.object_id, cap, seq=0).payload, {"t": 0})
+
+    def test_sweep_needs_pin_authority(self):
+        """Compaction is gated on PIN because retention policy is a human decision."""
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-no-sweep")
+
+        store = ObjectStore(validator)
+        obj = store.create("alice", "journal", {"t": 0}, cap, step=1)
+        for t in range(1, 12):
+            store.append("alice", obj.object_id, {"t": t}, cap, step=t + 1)
+
+        with self.assertRaises(PermissionError):
+            store.sweep("alice", None, keep_recent=3, min_versions=5)
+
     def test_object_store_falls_back_to_backup_only_when_it_loses_nothing(self):
         import json
         from origin.core.capability import Capability

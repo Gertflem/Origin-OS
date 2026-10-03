@@ -95,6 +95,20 @@ def object_store_handler(ctx: UnitContext, msg: Message) -> None:
             )
             ctx.respond(msg, "object.reclaimable", report)
 
+        elif verb == "object.sweep":
+            # Automatic retention. Section 3 states tiering as a policy, and a
+            # policy nobody applies is just a comment -- so it runs here. Dry run
+            # by default: automatic reclamation of durable memory has to be asked
+            # for, not stumbled into.
+            report = store.sweep(
+                msg.sender,
+                cap,
+                keep_recent=int(payload.get("keep_recent", 3)),
+                min_versions=int(payload.get("min_versions", 32)),
+                dry_run=bool(payload.get("apply", False)),
+            )
+            ctx.respond(msg, "object.swept", report)
+
         elif verb == "object.compact":
             result = store.compact(
                 msg.sender,

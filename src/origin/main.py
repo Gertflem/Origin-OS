@@ -54,7 +54,7 @@ The Nucleus is sealed. Its bootstrap authority is spent — from here every acti
 including the core's own, goes through a Capability.
 
   Say what you want:   brighten the beach photo by 20
-  Inspect freely:      /status  /objects  /reclaimable  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
+  Inspect freely:      /status  /objects  /reclaimable  /sweep  /history  /units  /agents  /names  /caps  /audit  /log  /watcher  /improver  /powers
   Borrow authority:    /show <name>   /grant <right> <target> <unit>   /spawn <kind> <name>
   The escape hatch:    /revoke        (answered here as the Guardian, not by a Unit)
   Everything else:     /help
@@ -232,6 +232,9 @@ def _handle(system: System, line: str) -> bool:
     if parts[0].lower() == "/reclaimable":
         _reclaimable(system, parts[1:])
         return True
+    if parts[0].lower() == "/sweep":
+        _sweep(system, parts[1:])
+        return True
     if parts[0].lower() == "/names":
         _names(system)
         return True
@@ -403,6 +406,62 @@ def _reclaimable(system: System, args: list[str]) -> None:
     if not totals["reclaimable_versions"]:
         print("  nothing to reclaim at this window.")
     print("  This is a preview. Nothing was compacted; compaction stays an explicit request.")
+
+
+def _sweep(system: System, args: list[str]) -> None:
+    """Apply the retention policy across the whole store.
+
+    `/sweep [keep_recent] [min_versions]` previews; add `apply` to act. This is
+    section 3's tiering running as policy rather than as a comment, but it stays
+    a dry run until explicitly told otherwise.
+    """
+    keep_recent, min_versions, apply = 3, 32, False
+    positional: list[int] = []
+    for arg in args:
+        if arg.lower() == "apply":
+            apply = True
+            continue
+        try:
+            positional.append(int(arg))
+        except ValueError:
+            print("Usage: /sweep [keep_recent] [min_versions] [apply]")
+            print("       keep_recent   versions to keep per Object (default 3)")
+            print("       min_versions  skip Objects shorter than this (default 32)")
+            print("       apply         actually compact; without it this is a preview")
+            return
+    if positional:
+        keep_recent = positional[0]
+    if len(positional) > 1:
+        min_versions = positional[1]
+
+    report = system.store.sweep(
+        HUMAN,
+        system.guardian,
+        keep_recent=keep_recent,
+        min_versions=min_versions,
+        dry_run=not apply,
+    )
+    head = "Retention sweep" if apply else "Retention sweep (preview, nothing touched)"
+    print(f"{head}: keeping the {report['keep_recent']} most recent versions per Object, "
+          f"skipping Objects under {report['min_versions']} versions")
+    if not report["candidates"]:
+        print("  no Object has outgrown its window yet.")
+        return
+    for row in report["candidates"]:
+        print(
+            "  "
+            f"{mask(str(row['object_id'])):<20} {row['kind']:<10} "
+            f"{len(row['reclaimable']):>3} of {row['versions']:>4} versions  "
+            f"{_fmt_bytes(row['reclaimable_bytes']):>9}  seqs {row['reclaimable']}"
+        )
+    if apply:
+        print(
+            f"  compacted {report['objects_swept']} Objects, reclaimed "
+            f"{report['versions_reclaimed']} version payloads ({_fmt_bytes(report['bytes_reclaimed'])}). "
+            "Metadata for every reclaimed version was kept."
+        )
+    else:
+        print("  Nothing was compacted. Re-run with 'apply' to reclaim these.")
 
 
 def _status(system: System) -> None:

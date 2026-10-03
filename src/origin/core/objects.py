@@ -286,6 +286,71 @@ class ObjectStore:
             for object_id, obj in self._objects.items()
         }
 
+    def sweep(self, holder: str, cap: Optional[Capability], *, keep_recent: int = 3,
+              min_versions: int = 32, dry_run: bool = True) -> dict:
+        """Compact every Object whose history has outgrown its retention window.
+
+        Section 3 describes tiered retention as a *policy*: recent versions at
+        full fidelity, pins never removed, older history semantically compacted.
+        Until now only the operator could apply it, by asking about one Object at
+        a time, so in practice history grew until a human decided to intervene.
+        This is that policy running on its own.
+
+        Deliberately conservative, because automatic reclamation of durable memory
+        is the kind of thing that should be hard to trigger accidentally:
+
+        - `min_versions` (default 32) means an Object is left alone until its
+          history is genuinely long. Short histories are usually more valuable
+          whole, and compacting them saves nothing.
+        - `dry_run` (default True) means nothing is touched until asked.
+        - Selection is `_reclaimable_seqs`, the same function `compact` acts on and
+          `reclaimable_report` previews, so this cannot disagree with either.
+          Pinned, preferred, recent and already-compacted versions are untouchable.
+
+        Compaction remains tiered rather than deletion: every reclaimed version
+        keeps its seq, author, step and note forever, and the sweep appends a
+        marker version naming exactly what it reclaimed (invariant 7).
+        """
+        self._check(cap, Right.PIN, None, holder)
+
+        candidates: list[dict] = []
+        for obj in self._objects.values():
+            if len(obj.versions) < int(min_versions):
+                continue
+            seqs = self._reclaimable_seqs(obj, keep_recent)
+            if seqs:
+                candidates.append(
+                    {
+                        "object_id": obj.object_id,
+                        "kind": obj.kind,
+                        "versions": len(obj.versions),
+                        "reclaimable": seqs,
+                        "reclaimable_bytes": sum(
+                            self._payload_bytes(v) for v in obj.versions if v.seq in set(seqs)
+                        ),
+                    }
+                )
+
+        candidates.sort(key=lambda row: -row["reclaimable_bytes"])
+        result = {
+            "keep_recent": keep_recent,
+            "min_versions": int(min_versions),
+            "dry_run": bool(dry_run),
+            "candidates": candidates,
+            "objects_swept": 0,
+            "versions_reclaimed": 0,
+            "bytes_reclaimed": 0,
+        }
+        if dry_run or not candidates:
+            return result
+
+        for row in candidates:
+            self.compact(holder, row["object_id"], cap, keep_recent=keep_recent)
+            result["objects_swept"] += 1
+            result["versions_reclaimed"] += len(row["reclaimable"])
+            result["bytes_reclaimed"] += row["reclaimable_bytes"]
+        return result
+
     def _persist(self) -> None:
         if self._storage_path is None:
             return

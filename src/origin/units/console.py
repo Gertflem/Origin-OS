@@ -67,6 +67,9 @@ HELP = f"""Origin — {__phase__}. Say what you want, or use a command.
     /watcher [n]       the last n containment and escalation events
     /improver [n]      the last n repair decisions and attempts
     /powers            the Nucleus's own account of its powers
+    /reclaimable [n]   what compaction could reclaim, per Object and store-wide
+    /sweep [k] [m] [apply]
+                       run the retention policy store-wide (preview without apply)
 
   actions (proposed first, executed only on 'confirm')
     /focus [name]      show or set what "this" and "it" refer to
