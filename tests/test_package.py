@@ -13,6 +13,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from origin import __phase__  # noqa: E402
+
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 
 class TestPackage(unittest.TestCase):
     def test_package_imports(self):
@@ -1287,7 +1292,9 @@ class TestPackage(unittest.TestCase):
 
         self.assertTrue(result)
         output = buffer.getvalue()
-        self.assertIn("Origin — Phase 1", output)
+        # Asserted against __phase__ rather than a literal, so the help text and
+        # the phase label cannot drift apart again.
+        self.assertIn(f"Origin — {__phase__}", output)
         self.assertIn("/status", output)
         self.assertIn("/log", output)
         self.assertIn("/watcher", output)
@@ -1308,7 +1315,10 @@ class TestPackage(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("Origin Phase 1", result.stdout)
+        # The captured pipe is decoded with the platform's default code page, so
+        # the em-dash in __phase__ may arrive mangled. Assert on the ASCII-safe
+        # part: the description must be built from the same label the banner uses.
+        self.assertIn(__phase__.split(" ")[1], result.stdout)
 
 
 class TestReclaimableReport(unittest.TestCase):

@@ -25,8 +25,8 @@ Nucleus. That keeps invariant 1 (the core stays tiny) true while still letting t
 one principal who is allowed to revoke actually name what to revoke.
 
 The interactive REPL is the default. `--demo` runs a scripted tour of the whole
-Phase 1 loop — intent, ambiguity, mail, revocation, self-healing — so the system can
-be watched end to end without typing.
+loop — intent, ambiguity, mail, revocation, self-healing — so the system can be
+watched end to end without typing.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from . import __phase__
 from .bootstrap import System, boot
 from .capability import Right
 from .ids import HUMAN, NUCLEUS, mask
@@ -42,8 +43,8 @@ from .message import Message
 #: Printed once at startup. States the two facts a newcomer needs: the core is
 #: sealed (its bootstrap authority is spent, not merely unused), and every action
 #: from here is capability-mediated.
-BANNER = """\
-Origin — Phase 1 (Pure Simulation)
+BANNER = f"""\
+Origin — {__phase__}
 
 A capability-based kernel: five primitives, no ambient authority, append-only
 Objects. Everything you type becomes Messages on a wire, and nothing happens
@@ -657,7 +658,7 @@ def main(argv: list[str] | None = None) -> int:
     _reconfigure_stdio()
     parser = argparse.ArgumentParser(
         prog="origin",
-        description="Origin Phase 1 — a capability-based OS kernel, simulated in pure Python.",
+        description=f"Origin ({__phase__}) — a capability-based OS kernel for AI agents, simulated in pure Python.",
     )
     parser.add_argument("--demo", action="store_true", help="run a scripted tour instead of the interactive REPL")
     parser.add_argument("--status", action="store_true", help="print a compact runtime summary without entering the interactive REPL")

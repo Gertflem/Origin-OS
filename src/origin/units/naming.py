@@ -19,8 +19,8 @@ lookup and no `list` you can call empty-handed. It will happily tell you that
 "the bright beach photo" is ambiguous — but only if you were already allowed to
 ask.
 
-Intent parsing here is deliberately rule-based rather than learned. It is a
-Phase 1 simulation of the *shape* of intent resolution — verb recognition,
+Intent parsing here is deliberately rule-based rather than learned. It implements
+the *shape* of intent resolution — verb recognition,
 reference resolution, capability requirement discovery, ambiguity escalation —
 and a rule-based parser makes every one of those steps inspectable, which is
 what section 8 demands. Advanced intent intelligence is a later parallel track.

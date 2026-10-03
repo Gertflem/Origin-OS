@@ -225,7 +225,8 @@ def is_answer(verb: str) -> bool:
     return verb in _SIGNAL_VERBS or verb.endswith(_ANSWER_SUFFIXES)
 
 
-#: The fixed table of unit kinds available in Phase 1.
+#: The table of registered unit kinds. Each Unit kind registers its handler here
+#: at import time; the Console lists these as the valid kinds for /spawn.
 #:
 #: This is the one place where "code" is not itself an Object, and it is worth
 #: being explicit about why. A Unit's *parameters* and *chosen entry point* live

@@ -21,11 +21,12 @@ without a relevant Capability is impossible, and object ids are 128-bit secrets,
 so the only way to reach an Object is to already hold a token naming it. The
 absence of an enumeration method is not an omission; it is the invariant.
 
-Phase 1 note: this is a pure simulation, so "durable" means acknowledged and
-committed to the store for the lifetime of the process. Surviving process death
-is Phase 2 (Persistent Object Substrate). The `acked` flag below is the seam
-where a real write-ahead log will attach, and nothing in this module assumes the
-backing store is memory.
+Durability note: "durable" here means the version survives process death, not
+just the current process. When a `storage_path` is configured every mutation is
+written through a temp file and an atomic rename, with the previous good snapshot
+kept as a `.bak` and damaged files quarantined rather than deleted. The `acked`
+flag below is the seam where a real write-ahead log will attach, and nothing in
+this module assumes the backing store is memory.
 """
 
 from __future__ import annotations

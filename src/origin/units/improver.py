@@ -29,7 +29,7 @@ proposes a better Unit is not the agent that destroys the old one — the Watche
 retires it), GRANT/REVOKE (above), PIN (retention policy is a human decision),
 AUDIT and BIND (it has no reason to look around or rename things).
 
-Honest Phase 1 limitation: Capability targets are ids, not kinds, so this Unit's
+Honest known limitation: Capability targets are ids, not kinds, so this Unit's
 APPEND token cannot be scoped to "code Objects only". An Improver that can rewrite
 code can also rewrite data. Section 7's real protection here is that every change
 is appended rather than applied, so a bad improvement is a bad *version* and not a
