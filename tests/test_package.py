@@ -58,6 +58,41 @@ class TestPackage(unittest.TestCase):
         self.assertFalse(store.read("alice", obj.object_id, cap, seq=v2.seq).acked)
         self.assertEqual(len(store.durable_versions("alice", obj.object_id, cap)), 1)
 
+    def test_object_store_falls_back_to_backup_only_when_it_loses_nothing(self):
+        import json
+        from origin.core.capability import Capability
+        from origin.core.objects import ObjectStore
+
+        validator = lambda cap, right, target, holder: None
+        cap = Capability("cap-fallback")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "objects.json"
+            bak = Path(tmpdir) / "objects.json.bak"
+            first = ObjectStore(validator, storage_path=path)
+            obj = first.create("alice", "journal", {"t": 0}, cap, step=1)
+            first.append("alice", obj.object_id, {"t": 1}, cap, step=2)
+            first.append("alice", obj.object_id, {"t": 2}, cap, step=3)
+            good = json.loads(path.read_text())
+
+            # Backup holds the full history; main lost a version -> backup is a safe superset.
+            bak.write_text(json.dumps(good))
+            damaged = json.loads(path.read_text())
+            damaged[obj.object_id]["versions"].pop(1)
+            path.write_text(json.dumps(damaged))
+            recovered = ObjectStore(validator, storage_path=path)
+            self.assertEqual(recovered.history_damage, [])
+            self.assertEqual(recovered.read("alice", obj.object_id, cap, seq=1).payload, {"t": 1})
+            self.assertIn("snapshot.restored_from_backup", [e["kind"] for e in recovered.recovery_events])
+
+            # Backup is older than main (lacks v2): falling back would lose data, so keep main and report.
+            older = json.loads(json.dumps(good))
+            older[obj.object_id]["versions"].pop(2)
+            bak.write_text(json.dumps(older))
+            path.write_text(json.dumps(damaged))
+            kept = ObjectStore(validator, storage_path=path)
+            self.assertEqual([d["kind"] for d in kept.history_damage], ["history.seq_gap"])
+            self.assertEqual(kept.read("alice", obj.object_id, cap).payload, {"t": 2})
+
     def test_object_store_detects_history_damage_on_load(self):
         import json
         from origin.core.capability import Capability

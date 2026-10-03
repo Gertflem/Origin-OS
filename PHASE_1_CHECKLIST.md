@@ -41,4 +41,5 @@ Do not jump ahead into Phase 2 until the working Phase 1 model is stable and ins
 - [x] 2.2 Recovery events (quarantine/restore/unrecoverable) recorded on the store and shown in `--status`
 - [ ] 2.2b Forward recovery events into the Nucleus audit trail (needs a message-based path, store must not gain ambient access)
 - [x] 2.3 Load-time history audit: seq gaps and dangling pin/preferred/compacted pointers are detected and reported (`history_damage`, `history.damaged` event), never auto-repaired
-- [ ] 2.4 Fall back to `.bak` when main snapshot parses but fails the history audit
+- [x] 2.4 Damaged-but-parseable main snapshot falls back to `.bak` only when the backup is clean and contains every version main holds (no data loss); otherwise main is kept and the damage reported
+- [ ] 2.5 Crash-recovery test matrix: kill between tmp write and replace, between replace and dir fsync

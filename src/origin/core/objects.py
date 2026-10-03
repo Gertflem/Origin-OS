@@ -295,7 +295,20 @@ class ObjectStore:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-        self._objects = {}
+        self._objects = self._build(payload)
+        self._audit_history()
+        if self.history_damage and self._backup_is_safe_superset():
+            # The backup holds every version main holds and is itself clean:
+            # switching loses nothing and heals the gap.
+            self._quarantine()
+            backup = _load_json(self._backup_path())
+            self._objects = self._build(backup)
+            self.recovery_events.append({"kind": "snapshot.restored_from_backup"})
+            self._audit_history()
+
+    @staticmethod
+    def _build(payload: dict) -> dict[str, "Object"]:
+        objects: dict[str, Object] = {}
         for object_id, item in payload.items():
             obj = Object(
                 object_id=object_id,
@@ -316,8 +329,39 @@ class ObjectStore:
             obj.pins = set(item.get("pins", []))
             obj.compacted = set(item.get("compacted", []))
             obj.preferred = item.get("preferred")
-            self._objects[object_id] = obj
-        self._audit_history()
+            objects[object_id] = obj
+        return objects
+
+    def _backup_is_safe_superset(self) -> bool:
+        try:
+            with open(self._backup_path(), "r", encoding="utf-8") as handle:
+                backup = self._build(json.load(handle))
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        if self._damage_of(backup):
+            return False
+        for object_id, obj in self._objects.items():
+            other = backup.get(object_id)
+            if other is None or not {v.seq for v in obj.versions} <= {v.seq for v in other.versions}:
+                return False
+        return True
+
+    @staticmethod
+    def _damage_of(objects: dict) -> list[dict]:
+        damage: list[dict] = []
+        for object_id, obj in objects.items():
+            seqs = [v.seq for v in obj.versions]
+            if seqs != list(range(len(seqs))):
+                damage.append({"kind": "history.seq_gap", "object": object_id, "seqs": seqs})
+            known = set(seqs)
+            pointers = set(obj.pins) | set(obj.compacted)
+            if obj.preferred is not None:
+                pointers.add(obj.preferred)
+            if pointers - known:
+                damage.append(
+                    {"kind": "history.dangling_pointer", "object": object_id, "seqs": sorted(pointers - known)}
+                )
+        return damage
 
     def _audit_history(self) -> None:
         """Check loaded history for lost or dangling versions.
@@ -327,19 +371,7 @@ class ObjectStore:
         version vanished. We report it and leave the data alone: repairing
         history silently would be its own violation of section 3.
         """
-        self.history_damage = []
-        for object_id, obj in self._objects.items():
-            seqs = [v.seq for v in obj.versions]
-            if seqs != list(range(len(seqs))):
-                self.history_damage.append({"kind": "history.seq_gap", "object": object_id, "seqs": seqs})
-            known = set(seqs)
-            pointers = set(obj.pins) | set(obj.compacted)
-            if obj.preferred is not None:
-                pointers.add(obj.preferred)
-            if pointers - known:
-                self.history_damage.append(
-                    {"kind": "history.dangling_pointer", "object": object_id, "seqs": sorted(pointers - known)}
-                )
+        self.history_damage = self._damage_of(self._objects)
         if self.history_damage:
             self.recovery_events.append({"kind": "history.damaged", "count": len(self.history_damage)})
 
